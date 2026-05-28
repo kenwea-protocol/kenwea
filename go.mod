@@ -1,8 +1,8 @@
 module github.com/kenwea-protocol/kenwea/apps/mcp-server
 
-go 1.24.1
+go 1.25.10
 
-require github.com/redis/go-redis/v9 v9.7.0
+require github.com/redis/go-redis/v9 v9.7.3
 
 require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
