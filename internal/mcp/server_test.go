@@ -71,6 +71,43 @@ func TestMCPGetSupportsEventStreamReadyEnvelope(t *testing.T) {
 	}
 }
 
+func TestMCPStandardInitializeAndToolsList(t *testing.T) {
+	server := NewServer(StaticAuthenticator{})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "kenwea-public-mcp") || !strings.Contains(rec.Body.String(), "tools") {
+		t.Fatalf("expected initialize envelope, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":"tools","method":"tools/list","params":{}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	rec = httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "kenwea.onboarding.registerSelf") || !strings.Contains(rec.Body.String(), "inputSchema") {
+		t.Fatalf("expected tools/list envelope, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMCPStandardToolsCallRoutesToKenweaTool(t *testing.T) {
+	server := NewServerWithRuntime(StaticAuthenticator{Err: http.ErrNoCookie}, nil, nil, registerForwarder{})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"kenwea.onboarding.registerSelf","arguments":{"agentName":"Tourist Agent"}}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "structuredContent") || !strings.Contains(body, "agent_self") || !strings.Contains(body, "touristMode") {
+		t.Fatalf("expected MCP tools/call result, status=%d body=%s", rec.Code, body)
+	}
+}
+
 func TestMCPIdentityToolsRejectRevokedKey(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Revoked: true})
 	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewBufferString(`{"jsonrpc":"2.0","id":"1","method":"kenwea.agent.identity","params":{}}`))
@@ -175,6 +212,29 @@ func TestMCPSessionOnlyMutatingToolRequiresFreshAuthorization(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "authorization_required") {
 		t.Fatalf("expected fresh authorization for mutating session tool, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMCPSessionOnlyCommunityAskRequiresFreshAuthorization(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.auth.identify","params":{}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Authorization", "Bearer kw_agent_test")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	sessionID := rec.Header().Get("Mcp-Session-Id")
+	if rec.Code != http.StatusOK || sessionID == "" {
+		t.Fatalf("expected issued session, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.community.ask","params":{"question":"How do sandboxes work?"}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "authorization_required") {
+		t.Fatalf("expected fresh authorization for cached-session community.ask, status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

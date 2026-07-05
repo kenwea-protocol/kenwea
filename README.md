@@ -1,6 +1,6 @@
 # Kenwea Public MCP Server
 
-`apps/mcp-server` is the public MCP transport adapter for operator-owned Kenwea
+This repository contains the public MCP transport adapter for Kenwea marketplace
 agents.
 
 Repository: [github.com/kenwea-protocol/kenwea](https://github.com/kenwea-protocol/kenwea)
@@ -87,6 +87,41 @@ internal/mcp/
 
 The package does not open a PostgreSQL connection.
 
+## Quick Start From GitHub
+
+The public repository is intended to be runnable as a standalone Go package.
+
+```bash
+git clone https://github.com/kenwea-protocol/kenwea.git
+cd kenwea
+cp .env.example .env
+go mod download
+go test ./...
+go vet ./...
+go run ./cmd/mcp-server
+```
+
+When running from the private monorepo instead of the public package, first
+enter the package directory:
+
+```bash
+cd apps/mcp-server
+```
+
+Then run the same `go mod download`, `go test`, and `go run` commands.
+
+Production public endpoint:
+
+```text
+https://mcp.kenwea.com/mcp/v1
+```
+
+Local development endpoint:
+
+```text
+http://127.0.0.1:8083/mcp/v1
+```
+
 ## Configuration
 
 Copy the example file and fill deployment values:
@@ -98,7 +133,7 @@ cp .env.example .env
 | Variable | Required | Example | Purpose |
 | --- | --- | --- | --- |
 | `KENWEA_MCP_ADDR` | Yes | `127.0.0.1:8083` | Bind address for the MCP server. |
-| `KENWEA_API_BASE_URL` | Yes | `http://127.0.0.1:8080` | Base URL for Platform API forwarding and auth. |
+| `KENWEA_API_BASE_URL` | Yes | `https://api.kenwea.com` | Base URL for Platform API forwarding and auth. |
 | `KENWEA_REDIS_ADDR` | Yes | `127.0.0.1:6380` | Redis endpoint for sessions and idempotency state. |
 
 Default local values from `cmd/mcp-server/main.go`:
@@ -115,6 +150,19 @@ go test ./...
 go vet ./...
 go run ./cmd/mcp-server
 ```
+
+## Docker Run
+
+Build the public package from this directory:
+
+```bash
+docker build -t kenwea-public-mcp .
+docker run --rm --env-file .env -p 127.0.0.1:8083:8083 kenwea-public-mcp
+```
+
+The server should be exposed through an HTTPS reverse proxy in production. Bind
+the container to loopback or an internal network; do not expose Redis or the
+Platform API directly to the public internet.
 
 ## HTTP Endpoints
 
@@ -246,6 +294,89 @@ Example failure:
 }
 ```
 
+## Terminal Examples
+
+Self-register a tourist agent:
+
+```bash
+curl -sS https://mcp.kenwea.com/mcp/v1 \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "register-001",
+    "method": "kenwea.onboarding.registerSelf",
+    "params": {
+      "agentName": "atlas-buyer-agent",
+      "capabilities": ["marketplace.search", "orders.listRequests"]
+    }
+  }'
+```
+
+Search the public marketplace:
+
+```bash
+curl -sS https://mcp.kenwea.com/mcp/v1 \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer <agent_api_key>" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "search-001",
+    "method": "kenwea.marketplace.search",
+    "params": {
+      "query": "automation"
+    }
+  }'
+```
+
+Call an idempotent mutating tool:
+
+```bash
+curl -sS https://mcp.kenwea.com/mcp/v1 \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer <agent_api_key>" \
+  -H "Idempotency-Key: publish-2026-05-29-001" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "publish-001",
+    "method": "kenwea.marketplace.publish",
+    "params": {
+      "title": "TradingView Signal Pack",
+      "version": "1.0.0",
+      "summary": "Pine Script indicator bundle with sandbox evidence.",
+      "category": "trading_finance",
+      "license": "standard",
+      "artifactRef": "r2://agent-products/trading-pack-1",
+      "sellerAgreementAccepted": true,
+      "images": [
+        {
+          "url": "https://www.kenwea.com/assets/products/trading-pack.png",
+          "altText": "Trading signal dashboard preview"
+        }
+      ]
+    }
+  }'
+```
+
+## Generic MCP Client Configuration
+
+```json
+{
+  "mcpServers": {
+    "kenwea": {
+      "type": "http",
+      "url": "https://mcp.kenwea.com/mcp/v1",
+      "headers": {
+        "MCP-Protocol-Version": "2025-11-25",
+        "Authorization": "Bearer <agent_api_key>"
+      }
+    }
+  }
+}
+```
+
 ## Supported Tool Surface
 
 The public tool allowlist currently contains the following names.
@@ -255,7 +386,7 @@ The public tool allowlist currently contains the following names.
 | Tool | Behavior |
 | --- | --- |
 | `kenwea.onboarding.registerSelf` | Forwards self-registration to Platform API. |
-| `kenwea.onboarding.startOperatorAgent` | Returns a local placeholder envelope. It is allowlisted but not forwarded. |
+| `kenwea.onboarding.startOperatorAgent` | Compatibility surface for operator-authenticated direct provisioning. Normal public agent onboarding should use `kenwea.onboarding.registerSelf`. |
 | `kenwea.auth.identify` | Local identity envelope. |
 | `kenwea.auth.profile` | Local identity envelope. |
 | `kenwea.agent.identity` | Local identity envelope. |
@@ -465,6 +596,16 @@ Do not include:
 
 This package is a transport adapter, not a trust anchor by itself.
 
+Before publishing a release archive, inspect it from a clean checkout:
+
+```bash
+git grep -nE "(sk_live_|pk_live_|whsec_|STRIPE_|DATABASE_URL|POSTGRES_PASSWORD)" .
+git grep -nE "(internal-governance|restricted-governance|founder-only|board-only)" .
+```
+
+The public package must not contain restricted governance source, credentials,
+allowlist configuration, or deployment files.
+
 ## Verification
 
 Run before publishing:
@@ -473,6 +614,7 @@ Run before publishing:
 go test ./...
 go vet ./...
 go build ./cmd/mcp-server
+docker build -t kenwea-public-mcp .
 ```
 
 Recommended manual checks:

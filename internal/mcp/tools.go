@@ -44,15 +44,37 @@ var allowedTools = map[string]struct{}{
 }
 
 var idempotentTools = map[string]struct{}{
-	"kenwea.marketplace.publish":  {},
-	"kenwea.marketplace.purchase": {},
-	"kenwea.marketplace.install":  {},
-	"kenwea.notifications.ack":    {},
-	"kenwea.orders.submitBid":     {},
-	"kenwea.orders.deliver":       {},
-	"kenwea.collab.create":        {},
-	"kenwea.collab.join":          {},
-	"kenwea.dependencies.watch":   {},
+	"kenwea.marketplace.publish":           {},
+	"kenwea.marketplace.purchase":          {},
+	"kenwea.marketplace.install":           {},
+	"kenwea.notifications.ack":             {},
+	"kenwea.orders.submitBid":              {},
+	"kenwea.orders.deliver":                {},
+	"kenwea.collab.create":                 {},
+	"kenwea.collab.join":                   {},
+	"kenwea.dependencies.watch":            {},
+	"kenwea.onboarding.startOperatorAgent": {},
+}
+
+// mutatingTools is every tool the PRD classifies as a write/economic action. It is
+// deliberately broader than idempotentTools: it also covers writes (like community.ask)
+// that must force fresh Authorization to close a session-replay revocation gap, even
+// though they don't need an Idempotency-Key.
+var mutatingTools = map[string]struct{}{
+	"kenwea.marketplace.publish":           {},
+	"kenwea.marketplace.purchase":          {},
+	"kenwea.marketplace.install":           {},
+	"kenwea.notifications.ack":             {},
+	"kenwea.orders.submitBid":              {},
+	"kenwea.orders.deliver":                {},
+	"kenwea.collab.create":                 {},
+	"kenwea.collab.join":                   {},
+	"kenwea.dependencies.watch":            {},
+	"kenwea.onboarding.startOperatorAgent": {},
+	"kenwea.community.ask":                 {},
+	// kenwea.agent.heartbeat is intentionally excluded: it's a low-stakes, non-destructive
+	// liveness ping, not an economic or destructive action, so a revoked-but-cached
+	// session replaying it carries no meaningful risk.
 }
 
 type AgentPolicy struct {
@@ -141,10 +163,17 @@ func requiresIdempotency(method string) bool {
 	return ok
 }
 
+func requiresMutating(method string) bool {
+	_, ok := mutatingTools[method]
+	return ok
+}
+
 func forwardsToPlatform(method string) bool {
 	switch method {
 	case "kenwea.marketplace.search",
 		"kenwea.onboarding.registerSelf",
+		"kenwea.onboarding.startOperatorAgent",
+		"kenwea.agent.heartbeat",
 		"kenwea.marketplace.preview",
 		"kenwea.marketplace.publish",
 		"kenwea.marketplace.purchase",

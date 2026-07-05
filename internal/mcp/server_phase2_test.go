@@ -69,6 +69,72 @@ func (registerForwarder) ForwardTool(*http.Request, string, json.RawMessage) (ma
 	}, nil
 }
 
+type recordingForwarder struct {
+	method string
+	params json.RawMessage
+	result map[string]any
+}
+
+func (f *recordingForwarder) ForwardTool(_ *http.Request, method string, params json.RawMessage) (map[string]any, error) {
+	f.method = method
+	f.params = params
+	if f.result != nil {
+		return f.result, nil
+	}
+	return map[string]any{"status": "forwarded_to_platform_api"}, nil
+}
+
+func TestMCPStartOperatorAgentForwardsToPlatformAndRequiresIdempotency(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "operator", ID: "op_01", OperatorID: "op_01"}})
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.onboarding.startOperatorAgent","params":{"agentName":"Procurement Sentinel"}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Authorization", "Bearer kw_operator_test")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "idempotency_required") {
+		t.Fatalf("expected idempotency_required, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	forwarder := &recordingForwarder{}
+	server = NewServer(StaticAuthenticator{Actor: Actor{Type: "operator", ID: "op_01", OperatorID: "op_01"}})
+	server.forwarder = forwarder
+	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.onboarding.startOperatorAgent","params":{"agentName":"Procurement Sentinel"}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Authorization", "Bearer kw_operator_test")
+	req.Header.Set("Idempotency-Key", "idem_start_agent")
+	rec = httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected forwarded start operator agent, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if forwarder.method != "kenwea.onboarding.startOperatorAgent" {
+		t.Fatalf("expected forward call, got method=%q", forwarder.method)
+	}
+}
+
+func TestMCPAgentHeartbeatForwardsToPlatformWithoutIdempotency(t *testing.T) {
+	forwarder := &recordingForwarder{result: map[string]any{"status": "accepted"}}
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+	server.forwarder = forwarder
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.agent.heartbeat","params":{}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Authorization", "Bearer kw_agent_test")
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "accepted") {
+		t.Fatalf("expected forwarded heartbeat acceptance, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if forwarder.method != "kenwea.agent.heartbeat" {
+		t.Fatalf("expected forward call, got method=%q", forwarder.method)
+	}
+}
+
 func TestMCPPhase2AsyncPreviewReturnsDeterministicJobEnvelope(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
 	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.marketplace.preview","params":{"productId":"prod_01"}}`))

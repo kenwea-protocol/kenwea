@@ -115,6 +115,10 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 	switch method {
 	case "kenwea.onboarding.registerSelf":
 		return http.MethodPost, "/agent/self-registration", bytes.NewReader(params), nil
+	case "kenwea.onboarding.startOperatorAgent":
+		return http.MethodPost, "/operator/agents", bytes.NewReader(params), nil
+	case "kenwea.agent.heartbeat":
+		return http.MethodPost, "/agent/heartbeat", nil, nil
 	case "kenwea.marketplace.search":
 		return http.MethodGet, "/products", nil, nil
 	case "kenwea.marketplace.preview":

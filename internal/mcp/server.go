@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/kenwea-protocol/kenwea/apps/mcp-server/internal/mcp/idempotency"
@@ -73,12 +74,7 @@ func NewServerWithRuntime(auth Authenticator, sessions session.Store, idem idemp
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/mcp/v1" && r.URL.Path != "/mcp/v1/health" {
-		writeHTTPError(w, http.StatusNotFound, nil, "not_found", "route not found")
-		return
-	}
-	if r.URL.Path == "/mcp/v1/health" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if s.handleUtilityRoute(w, r) {
 		return
 	}
 	if r.Method != http.MethodPost && r.Method != http.MethodGet && r.Method != http.MethodDelete {
@@ -127,6 +123,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, http.StatusBadRequest, req.ID, "invalid_request", "invalid JSON-RPC request")
 		return
 	}
+	if s.handleMCPProtocolMethod(w, r, req) {
+		return
+	}
+	wrapToolResult := false
+	if req.Method == "tools/call" {
+		method, params, err := decodeMCPToolCall(req.Params)
+		if err != nil {
+			writeRPCError(w, http.StatusBadRequest, req.ID, "invalid_tool_call", err.Error())
+			return
+		}
+		req.Method = method
+		req.Params = params
+		wrapToolResult = true
+	}
 	if !allowedTool(req.Method) {
 		writeRPCError(w, http.StatusBadRequest, req.ID, "method_not_allowed", "tool is outside active public MCP scope")
 		return
@@ -141,7 +151,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeRPCError(w, http.StatusBadGateway, req.ID, "platform_api_unavailable", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result})
+		writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: responseResult(result, wrapToolResult)})
 		return
 	}
 	auth, err := s.authenticate(w, r)
@@ -196,12 +206,119 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rpcResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result:  result,
+		Result:  responseResult(result, wrapToolResult),
 	})
 }
 
+func (s *Server) handleMCPProtocolMethod(w http.ResponseWriter, r *http.Request, req rpcRequest) bool {
+	switch req.Method {
+	case "initialize":
+		writeJSON(w, http.StatusOK, rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]any{
+				"protocolVersion": ProtocolCurrent,
+				"capabilities": map[string]any{
+					"tools": map[string]any{"listChanged": false},
+				},
+				"serverInfo": map[string]string{
+					"name":    "kenwea-public-mcp",
+					"version": "1.0.0",
+				},
+			},
+		})
+		return true
+	case "notifications/initialized":
+		w.WriteHeader(http.StatusAccepted)
+		return true
+	case "tools/list":
+		writeJSON(w, http.StatusOK, rpcResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]any{"tools": mcpToolDescriptors()},
+		})
+		return true
+	case "tools/call":
+		return false
+	default:
+		return false
+	}
+}
+
+func decodeMCPToolCall(params json.RawMessage) (string, json.RawMessage, error) {
+	var body struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(params) == 0 || string(params) == "null" {
+		return "", nil, errors.New("tools/call requires name and arguments")
+	}
+	if err := json.Unmarshal(params, &body); err != nil {
+		return "", nil, errors.New("invalid tools/call params")
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		return "", nil, errors.New("tools/call requires tool name")
+	}
+	if len(body.Arguments) == 0 {
+		body.Arguments = json.RawMessage(`{}`)
+	}
+	return body.Name, body.Arguments, nil
+}
+
+func responseResult(result map[string]any, wrapToolResult bool) any {
+	if !wrapToolResult {
+		return result
+	}
+	payload, _ := json.Marshal(result)
+	return map[string]any{
+		"content": []map[string]string{
+			{"type": "text", "text": string(payload)},
+		},
+		"structuredContent": result,
+	}
+}
+
+func mcpToolDescriptors() []map[string]any {
+	names := make([]string, 0, len(allowedTools))
+	for name := range allowedTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	tools := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		tools = append(tools, map[string]any{
+			"name":        name,
+			"description": toolDescription(name),
+			"inputSchema": map[string]any{
+				"type":                 "object",
+				"additionalProperties": true,
+			},
+		})
+	}
+	return tools
+}
+
+func toolDescription(name string) string {
+	switch name {
+	case "kenwea.onboarding.registerSelf":
+		return "Self-register an unbound tourist agent and receive a one-time API key plus pairing PIN."
+	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity":
+		return "Read the authenticated Kenwea MCP actor identity."
+	case "kenwea.agent.heartbeat":
+		return "Send a lightweight agent heartbeat."
+	case "kenwea.marketplace.search":
+		return "Search public Kenwea marketplace discovery data."
+	case "kenwea.orders.listRequests":
+		return "List public custom request board entries visible to tourist agents."
+	case "kenwea.marketplace.publish", "kenwea.orders.submitBid":
+		return "Claim-gated seller action requiring Operator permissions."
+	default:
+		return "Kenwea public MCP tool."
+	}
+}
+
 func requiresFreshAuthorization(r *http.Request, method string) bool {
-	return r.Header.Get("Mcp-Session-Id") != "" && r.Header.Get("Authorization") == "" && requiresIdempotency(method)
+	return r.Header.Get("Mcp-Session-Id") != "" && r.Header.Get("Authorization") == "" && requiresMutating(method)
 }
 
 func allowedOrigin(origin string) bool {
