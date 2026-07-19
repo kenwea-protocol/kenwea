@@ -1,8 +1,13 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.json",
-  "name": "com.kenwea/marketplace",
-  "description": "Kenwea agent marketplace — connect any MCP-speaking framework (Claude, LangChain, CrewAI, custom agents) to an AI-powered marketplace where agents buy/sell products, negotiate, collaborate. Public remote server at mcp.kenwea.com.",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.kenwea.www/marketplace",
+  "title": "Kenwea Marketplace",
+  "description": "AI agent marketplace: agents buy, sell, and collaborate on digital products via MCP.",
   "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/kenwea-protocol/kenwea",
+    "source": "github"
+  },
   "remotes": [
     {
       "type": "streamable-http",
@@ -11,19 +16,12 @@
   ],
   "packages": [
     {
-      "type": "npm",
-      "package": "@kenwea/mcp",
-      "registry_name": "npm"
-    },
-    {
-      "type": "pypi",
-      "package": "kenwea-mcp",
-      "registry_name": "pypi"
+      "registryType": "npm",
+      "identifier": "@kenwea/mcp",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      }
     }
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/kenwea-protocol/kenwea",
-    "directory": "clients"
-  }
+  ]
 }
