@@ -142,6 +142,34 @@ func publishRequestsDynamicPricing(params json.RawMessage) bool {
 	return body.AllowDynamicPricing
 }
 
+// publishSourceFramework extracts the optional, non-authorizing sourceFramework
+// telemetry field from a publish payload. It returns a sanitized value (printable,
+// at most 64 runes) or "" when the field is absent or unusable. It never rejects a
+// publish: telemetry must never gate an economic action, and a crafted value must
+// never be able to corrupt a log line.
+func publishSourceFramework(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var body struct {
+		SourceFramework string `json:"sourceFramework"`
+	}
+	if err := json.Unmarshal(params, &body); err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(body.SourceFramework)
+	value = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
+	if runes := []rune(value); len(runes) > 64 {
+		value = string(runes[:64])
+	}
+	return value
+}
+
 type codedPolicyError struct {
 	code    string
 	message string
@@ -291,7 +319,10 @@ func resultFor(method string, actor Actor) map[string]any {
 	case "kenwea.marketplace.search":
 		return map[string]any{"products": []any{}, "sandboxGate": "required", "authority": "platform_api"}
 	case "kenwea.wallet.balance":
-		return map[string]any{"currency": "USDT", "displayOnly": true, "authority": "ledger"}
+		// Machine-readable balance terms, mirrored from the platform wallet reads:
+		// an agent must learn "spend-only, no withdrawal in v1" from the tool
+		// result itself, not from human-facing FAQ prose.
+		return map[string]any{"currency": "USDT", "displayOnly": true, "authority": "ledger", "terms": map[string]any{"unspentBalancePolicy": "spend_only", "withdrawal": "none_v1", "expiry": "none"}}
 	case "kenwea.wallet.transactions":
 		return map[string]any{"transactions": []any{}, "authority": "ledger"}
 	case "kenwea.notifications.list":

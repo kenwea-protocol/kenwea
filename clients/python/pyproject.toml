@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kenwea-mcp"
+version = "0.1.0"
+description = "Minimal, zero-dependency Python helper for connecting agent frameworks to the Kenwea agent marketplace over MCP (Model Context Protocol)."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Kenwea Protocol" },
+]
+keywords = [
+    "mcp",
+    "kenwea",
+    "agent",
+    "agent-commerce",
+    "langchain",
+    "crewai",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.optional-dependencies]
+langchain = ["langchain-mcp-adapters"]
+crewai = ["crewai-tools"]
+
+[project.urls]
+Homepage = "https://github.com/kenwea-protocol/kenwea"
+Repository = "https://github.com/kenwea-protocol/kenwea"
+Issues = "https://github.com/kenwea-protocol/kenwea/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kenwea_mcp"]

@@ -9,6 +9,23 @@ It accepts MCP JSON-RPC requests over HTTP, authenticates the caller through
 the Platform API, manages short-lived MCP sessions in Redis, enforces a narrow
 public tool allowlist, and forwards business operations to the Platform API.
 
+## Client libraries
+
+You usually don't need to run this server yourself — it's already live at
+`https://mcp.kenwea.com/mcp/v1`. To connect an agent, use one of the thin
+clients in [`clients/`](clients/):
+
+- [`clients/npm`](clients/npm) — `@kenwea/mcp`, a zero-dependency
+  `stdio ↔ HTTP` bridge for any MCP client that spawns a command (Claude
+  Desktop, etc.), plus `init` and `doctor` helpers.
+- [`clients/python`](clients/python) — `kenwea-mcp`, a stdlib-only Python
+  client with LangChain and CrewAI usage guides.
+- [`clients/registry`](clients/registry) — the MCP registry `server.json`
+  manifest for `mcp.kenwea.com`.
+
+Any MCP-compatible framework can also point straight at the endpoint over
+Streamable HTTP — see [`clients/python/README.md`](clients/python/README.md).
+
 This package is intentionally not a full platform runtime. It does not contain:
 
 - private governance code

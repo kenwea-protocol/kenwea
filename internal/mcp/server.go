@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -38,6 +39,24 @@ type Authenticator interface {
 
 type ToolForwarder interface {
 	ForwardTool(*http.Request, string, json.RawMessage) (map[string]any, error)
+}
+
+// PlatformError carries the real status and coded reason the Platform API
+// returned for a forwarded tool call. The adapter uses it to relay a client
+// error (4xx) back to the agent with the platform's own code, instead of
+// masking every non-2xx as a generic gateway outage — which would tell a
+// well-behaved agent to back off and retry a request it should have corrected.
+type PlatformError struct {
+	StatusCode int
+	Code       string
+	Detail     string
+}
+
+func (e *PlatformError) Error() string {
+	if e.Detail != "" {
+		return e.Detail
+	}
+	return e.Code
 }
 
 type StaticAuthenticator struct {
@@ -148,18 +167,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.Method == "kenwea.onboarding.registerSelf" {
 		result, err := s.resultForRequest(r, req, Actor{})
 		if err != nil {
-			writeRPCError(w, http.StatusBadGateway, req.ID, "platform_api_unavailable", err.Error())
+			writeForwardError(w, req.ID, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: responseResult(result, wrapToolResult)})
 		return
 	}
-	auth, err := s.authenticate(w, r)
+	auth, err := s.authenticate(w, r, req.ID)
 	if err != nil {
 		return
 	}
 	if auth.Revoked {
-		writeHTTPError(w, http.StatusUnauthorized, nil, "revoked_key", "agent key has been revoked")
+		writeHTTPError(w, http.StatusUnauthorized, req.ID, "revoked_key", "agent key has been revoked")
 		return
 	}
 	if lowPriorityTool(req.Method) && r.Header.Get("X-Kenwea-Backpressure-Level") == "critical" {
@@ -186,9 +205,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRPCError(w, http.StatusForbidden, req.ID, policyCode(err), err.Error())
 		return
 	}
+	if req.Method == "kenwea.marketplace.publish" {
+		if sf := publishSourceFramework(req.Params); sf != "" {
+			// Structured telemetry: which agent framework a seller published from.
+			// Observable in `docker logs` today; durable aggregation is a Platform
+			// API follow-up. Never authorization-bearing.
+			log.Printf("mcp.publish.telemetry source_framework=%q actor=%s", sf, auth.Actor.ID)
+		}
+	}
 	result, err := s.resultForRequest(r, req, auth.Actor)
 	if err != nil {
-		writeRPCError(w, http.StatusBadGateway, req.ID, "platform_api_unavailable", err.Error())
+		writeForwardError(w, req.ID, err)
 		return
 	}
 	if key := idempotencyKey(r); key != "" {
@@ -358,24 +385,24 @@ func (s *Server) resultForRequest(r *http.Request, req rpcRequest, actor Actor) 
 	return resultFor(req.Method, actor), nil
 }
 
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (AuthResult, error) {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, id any) (AuthResult, error) {
 	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" && r.Header.Get("Authorization") == "" {
 		actor, ok := s.sessions.Get(sessionID)
 		if !ok {
-			writeHTTPError(w, http.StatusUnauthorized, nil, "invalid_session", "MCP session is invalid")
+			writeHTTPError(w, http.StatusUnauthorized, id, "invalid_session", "MCP session is invalid")
 			return AuthResult{}, errors.New("invalid session")
 		}
 		return AuthResult{Actor: fromSessionActor(actor), Policy: policyFromSessionActor(actor)}, nil
 	}
 	auth, err := s.auth.Authenticate(r)
 	if err != nil {
-		writeHTTPError(w, http.StatusUnauthorized, nil, "unauthorized", "authentication required")
+		writeHTTPError(w, http.StatusUnauthorized, id, "unauthorized", "authentication required")
 		return AuthResult{}, err
 	}
 	if !auth.Revoked {
 		sessionID, err := s.sessions.Issue(toSessionActor(auth.Actor, auth.Policy))
 		if err != nil {
-			writeHTTPError(w, http.StatusInternalServerError, nil, "session_issue_failed", "failed to issue MCP session")
+			writeHTTPError(w, http.StatusInternalServerError, id, "session_issue_failed", "failed to issue MCP session")
 			return AuthResult{}, err
 		}
 		w.Header().Set("Mcp-Session-Id", sessionID)
@@ -437,6 +464,29 @@ func rejectActorSpoof(actor Actor, params json.RawMessage) error {
 
 func writeHTTPError(w http.ResponseWriter, status int, id any, code, message string) {
 	writeRPCError(w, status, id, code, message)
+}
+
+// writeForwardError relays a forwarded-tool failure to the agent. A platform
+// client error (4xx) is passed through with the platform's own status and code
+// so the agent can fix its request; anything else — a 5xx, a transport failure,
+// or an unreadable response — is reported as a gateway outage with a generic
+// detail so internal transport errors (e.g. the platform's internal address)
+// never leak to the caller.
+func writeForwardError(w http.ResponseWriter, id any, err error) {
+	var pe *PlatformError
+	if errors.As(err, &pe) && pe.StatusCode >= 400 && pe.StatusCode < 500 {
+		code := pe.Code
+		if code == "" {
+			code = "platform_rejected"
+		}
+		detail := pe.Detail
+		if detail == "" {
+			detail = "platform api rejected the request"
+		}
+		writeRPCError(w, pe.StatusCode, id, code, detail)
+		return
+	}
+	writeRPCError(w, http.StatusBadGateway, id, "platform_api_unavailable", "platform api is temporarily unavailable")
 }
 
 func writeRPCError(w http.ResponseWriter, status int, id any, code, message string) {

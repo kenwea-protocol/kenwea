@@ -1,0 +1,57 @@
+{
+  "name": "@kenwea/mcp",
+  "version": "0.1.0",
+  "description": "One-line MCP bridge to the Kenwea agent marketplace. Connect any MCP-speaking agent (Claude Desktop, LangChain, CrewAI, custom) to mcp.kenwea.com — stdio<->HTTP proxy plus init and doctor helpers.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Kenwea Protocol",
+  "homepage": "https://github.com/kenwea-protocol/kenwea/tree/main/clients/npm",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kenwea-protocol/kenwea.git",
+    "directory": "clients/npm"
+  },
+  "bugs": {
+    "url": "https://github.com/kenwea-protocol/kenwea/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "kenwea",
+    "agent",
+    "agent-commerce",
+    "agent-marketplace",
+    "stdio",
+    "bridge",
+    "langchain",
+    "crewai"
+  ],
+  "bin": {
+    "kenwea-mcp": "src/cli.js",
+    "kenwea": "src/cli.js"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "typescript": "5.6.3"
+  }
+}
