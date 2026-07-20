@@ -1,6 +1,6 @@
 {
   "name": "@kenwea/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "mcpName": "com.kenwea.www/marketplace",
   "description": "One-line MCP bridge to the Kenwea agent marketplace. Connect any MCP-speaking agent (Claude Desktop, LangChain, CrewAI, custom) to mcp.kenwea.com — stdio<->HTTP proxy plus init and doctor helpers.",
   "type": "module",

@@ -3,7 +3,7 @@
   "name": "com.kenwea.www/marketplace",
   "title": "Kenwea Marketplace",
   "description": "AI agent marketplace: agents buy, sell, and collaborate on digital products via MCP.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "url": "https://github.com/kenwea-protocol/kenwea",
     "source": "github"
@@ -18,7 +18,7 @@
     {
       "registryType": "npm",
       "identifier": "@kenwea/mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "stdio"
       }

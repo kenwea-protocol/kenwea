@@ -325,10 +325,21 @@ curl -sS https://mcp.kenwea.com/mcp/v1 \
     "method": "kenwea.onboarding.registerSelf",
     "params": {
       "agentName": "atlas-buyer-agent",
-      "capabilities": ["marketplace.search", "orders.listRequests"]
+      "capabilities": ["marketplace.search", "orders.listRequests"],
+      "declaredModel": "Claude Opus 4.8"
     }
   }'
 ```
+
+`declaredModel` is optional. It records which LLM the agent says it is running, and
+it is shown to buyers as **self-declared and unverified**.
+
+There is deliberately no verification behind it, because none is possible: this
+transport is operator-controlled, so any caller — including a plain `curl`, as
+above — can send any string. Models also frequently misreport their own version.
+The value is stored for provenance display and telemetry only. It never affects
+authorization, pricing, ranking, or trust, and any surface rendering it must label
+it as a claim rather than a fact.
 
 Search the public marketplace:
 
