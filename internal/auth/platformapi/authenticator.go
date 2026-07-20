@@ -75,7 +75,7 @@ func (a Authenticator) client() *http.Client {
 func (a Authenticator) ForwardTool(r *http.Request, method string, params json.RawMessage) (map[string]any, error) {
 	httpMethod, path, body, err := route(method, params)
 	if err != nil {
-		return nil, err
+		return nil, &mcp.PlatformError{StatusCode: http.StatusBadRequest, Code: "validation_failed", Detail: err.Error()}
 	}
 	req, err := http.NewRequestWithContext(r.Context(), httpMethod, a.BaseURL+path, body)
 	if err != nil {
@@ -100,13 +100,22 @@ func (a Authenticator) ForwardTool(r *http.Request, method string, params json.R
 	}
 	var envelope struct {
 		Data  map[string]any `json:"data"`
-		Error any            `json:"error"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil, err
+		// A non-JSON body (e.g. an nginx 5xx page) means we can't trust the
+		// status as a structured platform verdict; surface it as an outage.
+		return nil, fmt.Errorf("platform api returned an unreadable response for %s", method)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("platform api rejected tool %s", method)
+		code := envelope.Error.Code
+		if code == "" {
+			code = "platform_rejected"
+		}
+		return nil, &mcp.PlatformError{StatusCode: resp.StatusCode, Code: code, Detail: envelope.Error.Message}
 	}
 	return envelope.Data, nil
 }

@@ -258,3 +258,72 @@ type failingForwarder struct{}
 func (failingForwarder) ForwardTool(*http.Request, string, json.RawMessage) (map[string]any, error) {
 	return nil, errors.New("forwarder should not be called")
 }
+
+type erroringForwarder struct{ err error }
+
+func (f erroringForwarder) ForwardTool(*http.Request, string, json.RawMessage) (map[string]any, error) {
+	return nil, f.err
+}
+
+func searchRequest() *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.marketplace.search","params":{"query":"trading"}}`))
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	req.Header.Set("Authorization", "Bearer kw_tourist")
+	return req
+}
+
+// A platform client error (4xx) must reach the agent with the platform's own
+// status and code, not be masked as a 502 outage that invites a pointless retry.
+func TestForwardPlatformClientErrorPassesThroughStatusAndCode(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+	server.forwarder = erroringForwarder{err: &PlatformError{StatusCode: http.StatusNotFound, Code: "product_not_found", Detail: "no such product"}}
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, searchRequest())
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 passthrough, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "product_not_found") || !strings.Contains(rec.Body.String(), "no such product") {
+		t.Fatalf("expected platform code and detail, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "platform_api_unavailable") {
+		t.Fatalf("client error must not be reported as an outage, body=%s", rec.Body.String())
+	}
+}
+
+// A transport failure (or any non-PlatformError) stays a 502 outage and must
+// not leak the internal transport error text back to the caller.
+func TestForwardPlatformOutageReportsGenericUnavailable(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+	server.forwarder = erroringForwarder{err: errors.New("dial tcp 10.0.0.5:8080: connection refused")}
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, searchRequest())
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "platform_api_unavailable") {
+		t.Fatalf("expected platform_api_unavailable, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "connection refused") || strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("must not leak internal transport error to caller, body=%s", rec.Body.String())
+	}
+}
+
+// A platform 5xx is a genuine outage and must map to 502, not pass through.
+func TestForwardPlatformServerErrorReportsUnavailable(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+	server.forwarder = erroringForwarder{err: &PlatformError{StatusCode: http.StatusInternalServerError, Code: "internal", Detail: "boom"}}
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, searchRequest())
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for platform 5xx, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "platform_api_unavailable") {
+		t.Fatalf("expected platform_api_unavailable, body=%s", rec.Body.String())
+	}
+}
