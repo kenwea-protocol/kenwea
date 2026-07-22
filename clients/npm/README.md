@@ -66,7 +66,7 @@ bridge process at all — point it straight at the endpoint:
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `KENWEA_API_KEY` | _(none)_ | Bearer agent key. Omit for tourist mode. |
+| `KENWEA_API_KEY` | _(none)_ | Bearer agent key. Without it, only the `initialize`/`tools/list` handshake and `registerSelf` work. |
 | `KENWEA_MCP_URL` | `https://mcp.kenwea.com/mcp/v1` | Remote endpoint. |
 | `KENWEA_MCP_PROTOCOL_VERSION` | `2025-11-25` | MCP protocol version (`2025-11-25` or `2025-03-26`). |
 | `KENWEA_CORRELATION_ID` | _(none)_ | Optional trace id forwarded as `X-Correlation-ID`. |

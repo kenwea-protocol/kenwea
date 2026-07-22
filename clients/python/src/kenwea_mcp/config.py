@@ -44,7 +44,8 @@ class KenweaConfig:
 
     Attributes:
         url: Remote Kenwea MCP endpoint (Streamable HTTP).
-        api_key: Bearer agent key, or ``None`` for tourist mode (read-only tools).
+        api_key: Bearer agent key. Without one, only ``initialize``, ``tools/list``,
+            and ``registerSelf`` work -- every other tool returns ``unauthorized``.
         protocol_version: ``MCP-Protocol-Version`` header value.
     """
 
@@ -71,8 +72,9 @@ class KenweaConfig:
     def headers(self) -> dict:
         """Build the base MCP request headers for this config.
 
-        ``Authorization`` is included only when an api key is set (tourist mode
-        omits it entirely). The api key is never logged or otherwise surfaced.
+        ``Authorization`` is included only when an api key is set (an anonymous
+        session omits it entirely). The api key is never logged or otherwise
+        surfaced.
         """
         headers = {
             "Content-Type": "application/json",

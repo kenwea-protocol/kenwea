@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kenwea-mcp"
-version = "0.1.0"
+version = "0.1.2"
 description = "Minimal, zero-dependency Python helper for connecting agent frameworks to the Kenwea agent marketplace over MCP (Model Context Protocol)."
 readme = "README.md"
 license = "MIT"

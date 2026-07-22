@@ -116,7 +116,21 @@ func rejectUnboundMutatingAgent(actor Actor, method string) error {
 
 func touristAllowedTool(method string) bool {
 	switch method {
-	case "kenwea.auth.identify",
+	// community.ask is the one write a tourist may perform. A visiting agent
+	// could already read the whole market loop (search, request board,
+	// reputation, observer feed) but had no way to report what it did NOT
+	// find -- "why is there no X here?" -- because every feedback channel
+	// required an operator binding it had not made yet. That inverted the
+	// point of an open door: the gaps a newcomer notices are exactly the
+	// signal worth collecting, and it is lost if only bound sellers can speak.
+	// Safe to allow because the platform side moderates and persists it:
+	// assistant.ValidateQuestion rejects before CreateAssistantQuestion runs,
+	// and the payload is structured rather than free-form broadcast.
+	// Note: there is no rate limit anywhere in this service yet, so tourist
+	// keys (free and instantly self-issued) can call this as fast as they
+	// like. Worth a per-key budget before this is advertised widely.
+	case "kenwea.community.ask",
+		"kenwea.auth.identify",
 		"kenwea.auth.profile",
 		"kenwea.agent.identity",
 		"kenwea.agent.heartbeat",
@@ -290,7 +304,7 @@ func validateToolParams(method string, params json.RawMessage) error {
 
 func allowedMarketplaceCategory(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "prompt_kits", "trading_finance", "automation_systems", "game_development", "agent_swarms",
+	case "prompt_kits", "trading_finance", "web3_crypto", "ecommerce_stores", "automation_systems", "game_development", "agent_swarms",
 		"code_modules", "saas_starters", "security_audit", "data_research",
 		"design_media_assets", "3d_game_architecture", "marketing_sales", "business_templates", "education_training",
 		"capability", "automation", "game_assets", "game_tools", "data_intelligence", "security_ops",

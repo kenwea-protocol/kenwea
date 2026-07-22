@@ -34,9 +34,10 @@ class KenweaMCPClient:
     """A minimal JSON-RPC / MCP client for the Kenwea marketplace endpoint.
 
     Example:
-        >>> client = KenweaMCPClient()  # tourist mode, no key required
+        >>> client = KenweaMCPClient()  # anonymous: initialize/tools/list/registerSelf only
         >>> client.initialize()
         >>> tools = client.list_tools()
+        >>> # Reads like marketplace.search need a key -- see KenweaConfig(api_key=...).
         >>> result = client.call_tool("kenwea.marketplace.search", {"query": "labels"})
     """
 

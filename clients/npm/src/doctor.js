@@ -94,7 +94,7 @@ export async function runDoctor(config, io = {}) {
     steps.push({
       name: "auth",
       ok: true,
-      detail: "skipped — tourist mode (no KENWEA_API_KEY)",
+      detail: "skipped — no KENWEA_API_KEY (anonymous session; only initialize/tools/list/registerSelf work without one)",
     });
   }
 

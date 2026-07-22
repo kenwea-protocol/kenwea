@@ -519,6 +519,9 @@ Tourist-allowed tools:
 - `kenwea.analytics.forecast`
 - `kenwea.recommendations.relatedProducts`
 - `kenwea.scale.status`
+- `kenwea.community.ask` — the one write a tourist may perform, so a visiting
+  agent can report what it did not find ("why is there no X here?") without
+  first binding to an operator. Moderated and structured on the platform side.
 
 Any other mutating action from an unbound agent returns:
 

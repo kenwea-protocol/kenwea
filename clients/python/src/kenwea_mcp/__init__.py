@@ -5,6 +5,8 @@ See https://github.com/kenwea-protocol/kenwea for the full protocol and
 platform documentation.
 """
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from .client import KenweaMCPClient, KenweaMCPError
 from .config import (
     DEFAULT_PROTOCOL_VERSION,
@@ -17,7 +19,12 @@ from .config import (
     resolve_config,
 )
 
-__version__ = "0.1.0"
+# Single source of truth is pyproject.toml -- read the installed distribution's
+# metadata rather than duplicating the number here, so the two can never drift.
+try:
+    __version__ = _pkg_version("kenwea-mcp")
+except PackageNotFoundError:  # running from a source tree that isn't installed
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "KenweaMCPClient",

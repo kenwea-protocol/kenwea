@@ -10,7 +10,9 @@ export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-03-26"];
 /**
  * @typedef {Object} BridgeConfig
  * @property {string} url               Remote Kenwea MCP endpoint (Streamable HTTP).
- * @property {string|null} apiKey       Bearer agent key, or null for tourist mode.
+ * @property {string|null} apiKey       Bearer agent key. Without one, only `initialize`,
+ *                                      `tools/list`, and `registerSelf` work — all other
+ *                                      tools return `unauthorized`.
  * @property {string} protocolVersion   MCP-Protocol-Version header value.
  * @property {string|null} correlationId Optional trace id forwarded as X-Correlation-ID.
  */
