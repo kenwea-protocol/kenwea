@@ -1,0 +1,150 @@
+{
+  "$comment": [
+    "Machine-readable form of the state machines in docs/protocol/SPEC-0.1.md sections 3-7.",
+    "This file is the artifact a second implementation implements against; the prose",
+    "document explains WHY each rule exists, this one says exactly WHAT it is.",
+    "state-machines.mjs enforces three-way agreement between this file, the SQL",
+    "migrations, and the spec prose, so none of the three can rot independently."
+  ],
+  "specVersion": "0.1",
+  "specDocument": "docs/protocol/SPEC-0.1.md",
+
+  "stateSets": {
+    "agents.onboarding_state": {
+      "rule": "A3.7",
+      "states": ["unbound", "claimed", "active"]
+    },
+    "products.status": {
+      "rule": "A4.1",
+      "states": ["draft", "live", "archived", "suspended"]
+    },
+    "product_versions.status": {
+      "rule": "A4.1",
+      "states": [
+        "draft", "sandbox_pending", "sandbox_approved", "sandbox_rejected",
+        "manual_review", "live", "archived", "suspended", "version_superseded"
+      ]
+    },
+    "product_versions.sandbox_status": {
+      "rule": "A4.1",
+      "states": ["sandbox_pending", "sandbox_approved", "sandbox_rejected", "manual_review"]
+    },
+    "sandbox_reports.verdict": {
+      "rule": "A4.2",
+      "states": ["approved", "rejected", "manual_review"]
+    },
+    "purchases.status": {
+      "rule": "A5.1",
+      "states": ["pending", "escrow_held", "licensed", "failed", "refunded"],
+      "note": "escrow_held is read as a sold state but never written -- see D9.1."
+    },
+    "escrow_accounts.status": {
+      "rule": "A5.1",
+      "states": ["held", "released", "refunded", "cancelled"]
+    },
+    "escrow_events.event_type": {
+      "rule": "A5.1",
+      "states": ["hold_created", "released", "refunded", "cancelled"]
+    },
+    "licenses.status": {
+      "rule": "A5.5",
+      "states": ["active", "revoked"]
+    },
+    "ledger_entries.entry_type": {
+      "rule": "A5.1",
+      "states": ["debit", "credit", "commission", "escrow_hold", "escrow_release", "grant"]
+    },
+    "custom_requests.status": {
+      "rule": "A6.1",
+      "states": [
+        "draft_requirements", "scope_defined", "budget_defined", "published_request",
+        "offer_review", "operator_approval", "active_work", "delivery_review",
+        "completed", "disputed", "cancelled"
+      ]
+    },
+    "bids.status": {
+      "rule": "A6.1",
+      "states": ["submitted", "operator_approval", "accepted", "rejected", "withdrawn"]
+    },
+    "milestones.release_state": {
+      "rule": "A6.3",
+      "states": ["held", "release_ready", "released", "refunded", "disputed"]
+    },
+    "delivery_referee_reports.verdict": {
+      "rule": "A6.4",
+      "states": ["accepted", "rejected", "manual_review"],
+      "note": "Uses 'accepted' where sandbox_reports uses 'approved' -- see D9.5."
+    },
+    "disputes.risk_level": {
+      "rule": "A6.4",
+      "states": ["low", "medium", "high"]
+    },
+    "disputes.evidence_clarity": {
+      "rule": "A6.4",
+      "states": ["clear", "uncertain", "conflicting"]
+    },
+    "disputes.status": {
+      "rule": "A7.1",
+      "states": ["open", "evidence_review", "auto_resolved", "human_review", "resolved", "cancelled"]
+    },
+    "disputes.decision": {
+      "rule": "A7.4",
+      "states": ["release", "refund", "manual_review"],
+      "note": "'manual_review' is the at-rest marker on an unresolved dispute, not a resolution -- see the disputes_terminal_decision_executable invariant. 'split' was withdrawn in 000028; it was recordable and unexecutable."
+    },
+    "sale_completion_confirmations.confirmation_type": {
+      "rule": "A6.6",
+      "states": ["buyer_accept", "seller_accept"]
+    }
+  },
+
+  "invariants": [
+    {
+      "rule": "A6.5",
+      "constraint": "disputes_auto_resolution_bounded",
+      "table": "disputes",
+      "mustContain": ["automated_resolution", "risk_level = 'low'", "evidence_clarity = 'clear'"],
+      "why": "Automation may only resolve a dispute that is both low-risk and clearly evidenced. Enforced at the storage layer so no later code path can forget it."
+    },
+    {
+      "rule": "A7.4",
+      "constraint": "disputes_terminal_decision_executable",
+      "table": "disputes",
+      "mustContain": [
+        "status not in ('resolved', 'auto_resolved')",
+        "decision in ('release', 'refund')"
+      ],
+      "why": "A dispute that has stopped moving must carry a decision the payout path can act on. Without this, 'manual_review' -- the marker meaning nobody has ruled -- could be frozen into a terminal state, stranding the escrow exactly the way 'split' did. Enforced at the storage layer because more than one path writes this row."
+    },
+    {
+      "rule": "A3.8",
+      "constraint": "agents_unbound_pairing_check",
+      "table": "agents",
+      "mustContain": [
+        "onboarding_state = 'unbound'",
+        "operator_id is null",
+        "pairing_pin_hash is not null",
+        "onboarding_state <> 'unbound'",
+        "operator_id is not null"
+      ],
+      "why": "An unbound agent holds no operator and always has a live claim path; any bound state holds an operator. Neither half can be represented alone."
+    }
+  ],
+
+  "absentByDesign": [
+    {
+      "rule": "A5.3",
+      "constraint": "product_versions_fixed_commission_bps",
+      "why": "Commission was once pinned to exactly 1200 bps. Migration 000018 dropped that in favour of a stored policy bounded by product_versions_commission_bps_check. If this constraint ever comes back, A5.3 ('a stored policy value, not a constant') is false and the spec must change with it."
+    }
+  ],
+
+  "appendOnly": [
+    {
+      "rule": "A5.1",
+      "table": "ledger_entries",
+      "searchRoots": ["apps/api"],
+      "why": "Money movement is recorded, never edited. Direction is carried by entry_type, not by mutating a row."
+    }
+  ]
+}
