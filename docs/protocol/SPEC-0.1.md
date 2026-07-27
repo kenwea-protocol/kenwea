@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (draft)
 **Status:** Descriptive. Not yet a standard.
-**Derived from:** commit `ff0a56e`, 26 applied migrations, one reference implementation.
+**Derived from:** 27 applied migrations, one reference implementation.
 **Date:** 2026-07-27
 
 ---
