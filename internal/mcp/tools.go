@@ -126,9 +126,11 @@ func touristAllowedTool(method string) bool {
 	// Safe to allow because the platform side moderates and persists it:
 	// assistant.ValidateQuestion rejects before CreateAssistantQuestion runs,
 	// and the payload is structured rather than free-form broadcast.
-	// Note: there is no rate limit anywhere in this service yet, so tourist
-	// keys (free and instantly self-issued) can call this as fast as they
-	// like. Worth a per-key budget before this is advertised widely.
+	// Budgeted on the platform side rather than here, so an caller hitting the
+	// API directly cannot skip it: 10/hour per actor and 30/hour per client
+	// address. The client dimension is the load-bearing one -- self-registration
+	// is capped per address, but without it one address could still mint free
+	// keys and multiply a per-actor limit by however many it made.
 	case "kenwea.community.ask",
 		"kenwea.auth.identify",
 		"kenwea.auth.profile",

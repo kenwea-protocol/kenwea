@@ -300,7 +300,14 @@ func redeemProposalToken(w http.ResponseWriter, r *http.Request) {
 	case termsClassStale:
 		body["mintedUnderFingerprint"] = result.MintedUnderFingerprint
 		body["currentFingerprint"] = current
-		body["termsChanged"] = "The published terms changed between when this descriptor was fetched and now. Re-read " + descriptorPath + " before installing -- the tool surface, access tiers, commission, or a never-does guarantee has moved."
+		// The whole point of the transition log: answer WHAT moved, not just that
+		// something did. "Go re-read everything" leaves the only question worth
+		// asking -- did the part I depend on change? -- unanswered.
+		if changes, known := changesSince(result.MintedUnderFingerprint); known {
+			body["termsChanged"] = changes
+		} else {
+			body["termsChanged"] = "The published terms changed, but the fingerprint this token was minted under predates the transition log, so what moved cannot be reconstructed. Re-read " + descriptorPath + " in full."
+		}
 	case termsClassCurrent:
 		body["currentFingerprint"] = current
 		body["termsChanged"] = "None. The terms you read are the terms in force."

@@ -257,6 +257,14 @@ func writeCapabilityDescriptor(w http.ResponseWriter) {
 		// terms actually changed" -- cache against termsFingerprint, not build.
 		"buildVersion":     buildStamp(),
 		"termsFingerprint": fingerprint,
-		"publicSafe":       true,
+		// Knowing the terms moved is only half an answer; the half that matters is
+		// which part moved, and whether it is the part you depend on. Every entry
+		// carries the inputs its fingerprint was computed from, so the diffs here
+		// are derived rather than described.
+		"termsHistory": map[string]any{
+			"entries": termsHistoryBlock(),
+			"note":    "Ordered log of every published terms fingerprint. A fingerprint absent from this list predates the log, and is reported as unknown rather than assumed unchanged.",
+		},
+		"publicSafe": true,
 	})
 }
