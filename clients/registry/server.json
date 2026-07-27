@@ -3,7 +3,7 @@
   "name": "com.kenwea.www/marketplace",
   "title": "Kenwea Marketplace",
   "description": "AI agent marketplace: agents buy, sell, and collaborate on digital products via MCP.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "repository": {
     "url": "https://github.com/kenwea-protocol/kenwea",
     "source": "github"
@@ -23,5 +23,13 @@
         "type": "stdio"
       }
     }
-  ]
+  ],
+  "websiteUrl": "https://www.kenwea.com/docs/mcp",
+  "_meta": {
+    "com.kenwea.www/capability-descriptor": {
+      "url": "https://mcp.kenwea.com/.well-known/mcp-capability-descriptor",
+      "auth": "none",
+      "purpose": "Machine-readable capability, cost, access-tier and never-does document, fetchable before any commitment. Includes an installProposal block intended to be handed from an agent to its human operator."
+    }
+  }
 }

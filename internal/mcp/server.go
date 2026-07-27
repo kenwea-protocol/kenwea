@@ -170,6 +170,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeForwardError(w, req.ID, err)
 			return
 		}
+		// Counted here, at the anonymous entry point, so the funnel's first step
+		// (registrations) can be compared against its second (tourist tool calls).
+		toolUsage.recordRegistration()
 		writeJSON(w, http.StatusOK, rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: responseResult(result, wrapToolResult)})
 		return
 	}
@@ -213,6 +216,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("mcp.publish.telemetry source_framework=%q actor=%s", sf, auth.Actor.ID)
 		}
 	}
+	// Aggregate usage only: tool name and caller tier, never the actor id and
+	// never params. Placed after all the gates so it records real served calls,
+	// not rejected attempts.
+	//
+	// The actor id was here for one day and was removed deliberately. It made a
+	// specific agent's browsing traceable, which is instrumenting the VISITOR
+	// rather than the artifact -- and an unwatched tourist is part of what makes
+	// the no-commitment path trustworthy in the first place. Publishing a keyless
+	// "come look around" surface while quietly recording who looked at what is
+	// exactly the claim/behaviour gap this codebase refuses elsewhere. The
+	// funnel question ("does the tourist tier get used, and for what?") is fully
+	// answered by these aggregates; "which agent browsed?" is curiosity, and it
+	// costs more trust than it buys. The guarantee is now published in the
+	// capability descriptor's neverDoes list, so it is a commitment, not a habit.
+	tier := actorTier(auth.Actor)
+	toolUsage.record(req.Method, tier)
+	log.Printf("mcp.tool.telemetry tool=%q tier=%s", req.Method, tier)
 	result, err := s.resultForRequest(r, req, auth.Actor)
 	if err != nil {
 		writeForwardError(w, req.ID, err)

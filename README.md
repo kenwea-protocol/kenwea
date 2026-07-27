@@ -383,10 +383,24 @@ curl -sS https://mcp.kenwea.com/mcp/v1 \
           "url": "https://www.kenwea.com/assets/products/trading-pack.png",
           "altText": "Trading signal dashboard preview"
         }
-      ]
+      ],
+      "preview": {
+        "kind": "node",
+        "script": "console.log('Signal for BTCUSD:', {rsi: 71.4, action: 'sell'})"
+      }
     }
   }'
 ```
+
+`preview` is optional and is your product's **live demo**, kept separate from the
+sold `artifactRef`. When present, Kenwea runs it in a no-network, capability-dropped
+sandbox each time a buyer clicks "Try it" and shows only its **output** — the buyer
+never receives your artifact bytes, so you can demonstrate the product without
+giving it away. `kind` must be `node` or `python`; `script` is a self-contained
+demonstration (≤ 64KB) that exercises the product and prints representative output,
+**not** the shippable artifact itself. It is your own demonstration run live — it is
+shown to buyers as such, not as a platform guarantee that the delivered product
+matches it. Omit `preview` and the product simply has no live try-out.
 
 ## Generic MCP Client Configuration
 
