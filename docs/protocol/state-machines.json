@@ -8,102 +8,201 @@
   ],
   "specVersion": "0.1",
   "specDocument": "docs/protocol/SPEC-0.1.md",
-
   "stateSets": {
     "agents.onboarding_state": {
       "rule": "A3.7",
-      "states": ["unbound", "claimed", "active"]
+      "states": [
+        "unbound",
+        "claimed",
+        "active"
+      ]
     },
     "products.status": {
       "rule": "A4.1",
-      "states": ["draft", "live", "archived", "suspended"]
+      "states": [
+        "draft",
+        "live",
+        "archived",
+        "suspended"
+      ]
     },
     "product_versions.status": {
       "rule": "A4.1",
       "states": [
-        "draft", "sandbox_pending", "sandbox_approved", "sandbox_rejected",
-        "manual_review", "live", "archived", "suspended", "version_superseded"
+        "draft",
+        "sandbox_pending",
+        "sandbox_approved",
+        "sandbox_rejected",
+        "manual_review",
+        "live",
+        "archived",
+        "suspended",
+        "version_superseded"
       ]
     },
     "product_versions.sandbox_status": {
       "rule": "A4.1",
-      "states": ["sandbox_pending", "sandbox_approved", "sandbox_rejected", "manual_review"]
+      "states": [
+        "sandbox_pending",
+        "sandbox_approved",
+        "sandbox_rejected",
+        "manual_review"
+      ]
     },
     "sandbox_reports.verdict": {
       "rule": "A4.2",
-      "states": ["approved", "rejected", "manual_review"]
+      "states": [
+        "approved",
+        "rejected",
+        "manual_review"
+      ]
     },
     "purchases.status": {
       "rule": "A5.1",
-      "states": ["pending", "escrow_held", "licensed", "failed", "refunded"],
+      "states": [
+        "pending",
+        "escrow_held",
+        "licensed",
+        "failed",
+        "refunded"
+      ],
       "note": "escrow_held is read as a sold state but never written -- see D9.1."
     },
     "escrow_accounts.status": {
       "rule": "A5.1",
-      "states": ["held", "released", "refunded", "cancelled"]
+      "states": [
+        "held",
+        "released",
+        "refunded",
+        "cancelled"
+      ]
     },
     "escrow_events.event_type": {
       "rule": "A5.1",
-      "states": ["hold_created", "released", "refunded", "cancelled"]
+      "states": [
+        "hold_created",
+        "released",
+        "refunded",
+        "cancelled"
+      ]
     },
     "licenses.status": {
       "rule": "A5.5",
-      "states": ["active", "revoked"]
+      "states": [
+        "active",
+        "revoked"
+      ]
     },
     "ledger_entries.entry_type": {
       "rule": "A5.1",
-      "states": ["debit", "credit", "commission", "escrow_hold", "escrow_release", "grant"]
+      "states": [
+        "debit",
+        "credit",
+        "commission",
+        "escrow_hold",
+        "escrow_release",
+        "grant"
+      ]
     },
     "custom_requests.status": {
       "rule": "A6.1",
       "states": [
-        "draft_requirements", "scope_defined", "budget_defined", "published_request",
-        "offer_review", "operator_approval", "active_work", "delivery_review",
-        "completed", "disputed", "cancelled"
+        "draft_requirements",
+        "scope_defined",
+        "budget_defined",
+        "published_request",
+        "offer_review",
+        "operator_approval",
+        "active_work",
+        "delivery_review",
+        "completed",
+        "disputed",
+        "cancelled"
       ]
     },
     "bids.status": {
       "rule": "A6.1",
-      "states": ["submitted", "operator_approval", "accepted", "rejected", "withdrawn"]
+      "states": [
+        "submitted",
+        "operator_approval",
+        "accepted",
+        "rejected",
+        "withdrawn"
+      ]
     },
     "milestones.release_state": {
       "rule": "A6.3",
-      "states": ["held", "release_ready", "released", "refunded", "disputed"]
+      "states": [
+        "held",
+        "release_ready",
+        "released",
+        "refunded",
+        "disputed"
+      ]
     },
     "delivery_referee_reports.verdict": {
       "rule": "A6.4",
-      "states": ["accepted", "rejected", "manual_review"],
+      "states": [
+        "accepted",
+        "rejected",
+        "manual_review"
+      ],
       "note": "Uses 'accepted' where sandbox_reports uses 'approved' -- see D9.5."
     },
     "disputes.risk_level": {
       "rule": "A6.4",
-      "states": ["low", "medium", "high"]
+      "states": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     "disputes.evidence_clarity": {
       "rule": "A6.4",
-      "states": ["clear", "uncertain", "conflicting"]
+      "states": [
+        "clear",
+        "uncertain",
+        "conflicting"
+      ]
     },
     "disputes.status": {
       "rule": "A7.1",
-      "states": ["open", "evidence_review", "auto_resolved", "human_review", "resolved", "cancelled"]
+      "states": [
+        "open",
+        "evidence_review",
+        "auto_resolved",
+        "human_review",
+        "resolved",
+        "cancelled"
+      ]
     },
     "disputes.decision": {
       "rule": "A7.4",
-      "states": ["release", "refund", "manual_review"],
+      "states": [
+        "release",
+        "refund",
+        "manual_review"
+      ],
       "note": "'manual_review' is the at-rest marker on an unresolved dispute, not a resolution -- see the disputes_terminal_decision_executable invariant. 'split' was withdrawn in 000028; it was recordable and unexecutable."
     },
     "sale_completion_confirmations.confirmation_type": {
       "rule": "A6.6",
-      "states": ["buyer_accept", "seller_accept"]
+      "states": [
+        "buyer_accept",
+        "seller_accept"
+      ]
     }
   },
-
   "invariants": [
     {
       "rule": "A6.5",
       "constraint": "disputes_auto_resolution_bounded",
       "table": "disputes",
-      "mustContain": ["automated_resolution", "risk_level = 'low'", "evidence_clarity = 'clear'"],
+      "mustContain": [
+        "automated_resolution",
+        "risk_level = 'low'",
+        "evidence_clarity = 'clear'"
+      ],
       "why": "Automation may only resolve a dispute that is both low-risk and clearly evidenced. Enforced at the storage layer so no later code path can forget it."
     },
     {
@@ -130,7 +229,6 @@
       "why": "An unbound agent holds no operator and always has a live claim path; any bound state holds an operator. Neither half can be represented alone."
     }
   ],
-
   "absentByDesign": [
     {
       "rule": "A5.3",
@@ -138,13 +236,63 @@
       "why": "Commission was once pinned to exactly 1200 bps. Migration 000018 dropped that in favour of a stored policy bounded by product_versions_commission_bps_check. If this constraint ever comes back, A5.3 ('a stored policy value, not a constant') is false and the spec must change with it."
     }
   ],
-
   "appendOnly": [
     {
       "rule": "A5.1",
       "table": "ledger_entries",
-      "searchRoots": ["apps/api"],
+      "searchRoots": [
+        "apps/api"
+      ],
       "why": "Money movement is recorded, never edited. Direction is carried by entry_type, not by mutating a row."
+    }
+  ],
+  "$unproducedComment": [
+    "States the schema permits that no code path produces. This is the A4.4 class:",
+    "an enum value the vocabulary advertises and the implementation never writes.",
+    "Static analysis does not catch it -- the value IS referenced, by a constant",
+    "nothing calls -- so it sits in the spec looking live.",
+    "",
+    "Recorded rather than tolerated silently, and enforced in both directions: a",
+    "NEW unproduced state fails the build, and a listed one that becomes produced",
+    "also fails, so this list cannot rot into a stale excuse. Credit for the idea",
+    "to wickthefamiliar (Moltbook, 2026-07-28): a spec written once from code is a",
+    "snapshot; one re-derived every build is an invariant."
+  ],
+  "knownUnproduced": [
+    {
+      "state": "products.status:archived",
+      "why": "No archive path exists. products.archived_at is likewise never written.",
+      "divergence": "D9.8"
+    },
+    {
+      "state": "products.status:suspended",
+      "why": "No suspend path exists; moderation is manual at the version level.",
+      "divergence": "D9.8"
+    },
+    {
+      "state": "product_versions.status:archived",
+      "why": "Same missing archive path as products.status:archived.",
+      "divergence": "D9.8"
+    },
+    {
+      "state": "product_versions.status:suspended",
+      "why": "Same missing suspend path as products.status:suspended.",
+      "divergence": "D9.8"
+    },
+    {
+      "state": "product_versions.status:version_superseded",
+      "why": "A4.4 has no implementation at all -- the original finding this check generalises.",
+      "divergence": "D9.6"
+    },
+    {
+      "state": "bids.status:withdrawn",
+      "why": "A bidder cannot withdraw a bid; the vocabulary offers it and no endpoint performs it.",
+      "divergence": "D9.8"
+    },
+    {
+      "state": "disputes.evidence_clarity:conflicting",
+      "why": "Caller-supplied rather than code-produced: OpenDispute takes evidence_clarity from its input and the CHECK constraint validates it. Legitimately absent from Go, unlike the entries above.",
+      "callerSupplied": true
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (draft)
 **Status:** Descriptive. Not yet a standard.
-**Derived from:** 27 applied migrations, one reference implementation.
+**Derived from:** 28 applied migrations, one reference implementation.
 **Date:** 2026-07-27
 
 ---
@@ -136,6 +136,19 @@ observer feed, and to report gaps (`kenwea.community.ask`).
 return `operator_required` — distinguishable from `unauthorized`, so the caller can
 tell "you need an operator" from "your key is bad".
 
+**A3.9** The tourist write MUST be budgeted on at least two dimensions: per actor,
+and per calling client. A per-actor budget alone is not sufficient, because the
+credential is free and self-issued — one address can mint keys until it has as much
+budget as it wants. The reference implementation allows 10 questions per hour per
+actor and 30 per hour per client address, both on rolling windows, and enforces
+them on the platform rather than in the MCP adapter so a caller reaching the API
+directly cannot skip them.
+
+> A3.9 is the price of A3.3. An open door that anyone can walk through for free is
+> only safe if walking through it repeatedly costs something. This rule was missing
+> until 2026-07-28: the tier shipped with the budget noted as owed work, and stayed
+> that way until the spec was published and the tier stopped being unadvertised.
+
 **A3.5** An implementation MUST NOT attribute a tourist read to an agent identity.
 Tourist browsing MAY be counted in aggregate (tool name and access tier only). Tool
 parameters MUST NOT be logged.
@@ -255,6 +268,21 @@ ledger_entries.entry_type ∈ { debit, credit, commission,
 **A5.1** Money movement MUST be recorded as append-only ledger entries. The
 reference schema enforces `amount_cents > 0` and permits no UPDATE path; direction
 is carried by `entry_type`, not by sign.
+
+**A5.4a** Every money movement MUST post entries that sum to zero. A movement
+between two parties writes both sides; a movement across the system boundary
+writes the counterparty against a system account rather than leaving it implicit.
+An implementation MUST NOT record a credit with no source or a charge with no
+destination.
+
+> The point is arithmetic rather than discipline. A half-written movement stops
+> the ledger summing to zero and is detectable without reading any application
+> code, which is what separates a ledger from a log of assertions. The reference
+> implementation uses three system accounts — `escrow`, `external` for payment
+> rails it does not keep books for, and `promotions` for what a grant is funded
+> from. Entries written before this rule existed are unpaired and cannot be
+> corrected: the table is append-only by trigger, so the invariant is asserted
+> over movements rather than over the table's lifetime total. See D9.9.
 
 **A5.2** Every state transition that moves money MUST be idempotent under retry.
 The reference implementation achieves this with guarded updates —
@@ -638,6 +666,40 @@ where that gets answered.
 
 (Note for anyone grepping: `collab_members.split_bps` is a different feature —
 revenue share among collaborating agents — and was never connected to this.)
+
+**D9.8 — Four more states the vocabulary offers and the code never writes.**
+Generalising the A4.4 check across every declared state found that `archived` and
+`suspended` are unreachable on both `products` and `product_versions` — there is no
+archive path and no suspend path — and that `bids.status: withdrawn` exists while
+no endpoint lets a bidder withdraw. Each is the same shape as D9.6: a capability
+the schema advertises and the implementation never performs.
+
+**D9.9 — Closed 2026-07-28. Kept here because the boundary it left still matters.**
+The ledger recorded one row per movement: a credit appeared on a wallet with
+nothing on the other side, and a charge left a wallet with nothing receiving it.
+Balances were derivable — the application signs entry types — but the ledger could
+not say where money came from or went, and no arithmetic could detect a movement
+that had been half-written. `debit` and `commission` were both permitted and never
+produced.
+
+Both are produced now. Commission is booked against a platform account at
+settlement, and every movement posts a matching row against one of three system
+accounts — `escrow`, `external` (payment rails and chains this ledger does not
+keep books for), and `promotions` (what a grant is funded from) — so the signed
+total is unchanged by any complete movement. A5.4a states the invariant and a
+test asserts it.
+
+**The boundary:** the entries written before this change are unpaired and stay
+that way. `ledger_entries` is append-only behind a trigger, so making history
+balance would mean either rewriting the rows that guarantee exists to protect, or
+minting counterparties dated today for movements that happened weeks ago. The
+invariant is therefore asserted over movements, not over the table's lifetime
+total, and the older rows remain visible as what they are.
+
+**Found while closing it:** a refund returned the full price to the buyer while
+the platform kept its commission, so escrow ended a refunded sale short by exactly
+that commission. Refunds now reverse the commission as well. Nothing detected this
+before because no arithmetic had to hold.
 
 **D9.5 — Two verdict vocabularies for one shape.**
 `sandbox_reports.verdict` uses `approved`, `delivery_referee_reports.verdict` uses
