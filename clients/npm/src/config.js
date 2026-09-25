@@ -5,7 +5,19 @@
 
 export const DEFAULT_URL = "https://mcp.kenwea.com/mcp/v1";
 export const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
-export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-03-26"];
+// Mirrors SupportedProtocolVersionList() in apps/mcp-server. 2025-06-18 was missing
+// from both until 2026-07-30, and because the bridge and the server carried the same
+// two strings, every test we ran sent a version we accepted -- so the server's refusal
+// of a published revision could only ever be discovered by someone else's client.
+export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
+// The 2026-07-28 revision is not a value you configure, because it is not a header
+// the bridge can stamp on every message: a request under it carries its own version
+// in params._meta, and a legacy client's initialize and tools/list do not. So the
+// bridge passes it through per message. When the local client sends a request whose
+// _meta names this revision, the bridge forwards it with this version in the header,
+// adds the Mcp-Method and Mcp-Name routing headers, and sends no session id; every
+// other message goes out exactly as before with the configured legacy version.
+export const STATELESS_PROTOCOL_VERSION = "2026-07-28";
 
 /**
  * @typedef {Object} BridgeConfig

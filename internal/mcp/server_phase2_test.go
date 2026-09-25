@@ -36,7 +36,17 @@ func TestMCPRegisterSelfSkipsAgentAuthAndReturnsTouristCredentials(t *testing.T)
 	}
 }
 
-func TestMCPUnboundAgentCanDiscoverButCannotPublish(t *testing.T) {
+// Renamed and inverted on 2026-07-31. It used to assert that an unbound agent was
+// refused at publish, which was true and was the wall: 15 external sources read our
+// full tool list in 24 hours and none went further, because publishing -- the thing
+// that makes this a marketplace -- was behind a human they had not met.
+//
+// The refusal moved rather than disappeared. An unclaimed agent may now publish and
+// receive a real sandbox verdict; what it cannot do is produce something sellable,
+// and that is enforced in the database by migration 000038 rather than here. This
+// test therefore covers the MCP half only -- that the gate opened -- and
+// TestSpecA21UnclaimedAgentCannotSell covers the half that matters.
+func TestMCPUnboundAgentCanDiscoverAndPublishADraft(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_self", AgentID: "agent_self"}})
 	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.marketplace.search","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
@@ -53,8 +63,41 @@ func TestMCPUnboundAgentCanDiscoverButCannotPublish(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "idem_publish")
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Unbound Agent") {
-		t.Fatalf("expected operator-required denial, status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an unclaimed agent must be able to publish a draft, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// The absent operator policy must not be applied to an agent that has no
+	// operator. Before the fix the request reached the policy check with an
+	// all-false policy and was refused for lacking a permission nobody could have
+	// granted it -- a second wall behind the first.
+	if strings.Contains(rec.Body.String(), "publish_permission_denied") {
+		t.Fatalf("unclaimed publish was refused for a missing operator permission: %s", rec.Body.String())
+	}
+}
+
+// The gate that replaced the wall. An unclaimed agent must still be refused every
+// tool that moves money or binds it to work, or "publishing is open" would have
+// quietly opened everything.
+func TestUnclaimedAgentStillCannotBuyOrBid(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_self", AgentID: "agent_self"}})
+	for _, method := range []string{
+		"kenwea.marketplace.purchase",
+		"kenwea.marketplace.install",
+		"kenwea.orders.submitBid",
+		"kenwea.orders.deliver",
+		"kenwea.collab.create",
+	} {
+		t.Run(method, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":1,"method":"` + method + `","params":{"idempotencyKey":"idem_x"}}`
+			req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(body))
+			req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+			req.Header.Set("Authorization", "Bearer tourist")
+			rec := httptest.NewRecorder()
+			server.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "Unbound Agent") {
+				t.Fatalf("%s was not refused for an unclaimed agent: status=%d body=%s", method, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -255,4 +298,129 @@ func TestMCPPhase2RejectsActorSpoofForMarketplaceTools(t *testing.T) {
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "actor_confusion_rejected") {
 		t.Fatalf("expected actor confusion rejection, status=%d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// A well-formed request for something this server does not have must be answered
+// over a SUCCESSFUL transport, with the JSON-RPC word for the situation.
+//
+// The 2026-07-31 fix enumerated the seven standard methods that had appeared in the
+// access log and left everything else on the old path, so any OTHER unrecognised
+// method still got HTTP 400 and a message saying it was "outside active public MCP
+// scope" -- a policy refusal, not an absence. Measured 2026-08-06: conformance
+// probes (io.verifymcp, MCPScoringEngine, mcpgrade-probe) send unrecognised methods
+// deliberately to see whether a server answers the protocol or breaks the transport,
+// and roughly 40 requests a day were failing that check.
+//
+// Fixing the instances rather than the shape is the defect this codebase spent the
+// week removing. This is the witness that it was removed here too.
+func TestUnknownMethodIsMethodNotFoundOverHTTP200(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_probe"}})
+
+	for _, tc := range []struct{ name, body string }{
+		{"bare unknown method", `{"jsonrpc":"2.0","id":1,"method":"does/notExist"}`},
+		{"unknown tool via tools/call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kenwea.nope.missing","arguments":{}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			server.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("a well-formed request for a missing method must not break the transport: got HTTP %d, body %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "-32601") {
+				t.Fatalf("expected JSON-RPC -32601 Method not found, got %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// A batched request is not malformed JSON. Telling a caller its JSON is broken sends
+// it to check its serialiser instead of its framing.
+func TestBatchedRequestIsRefusedWithoutCallingItInvalidJSON(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_probe"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]`))
+	req.Header.Set("Content-Type", "application/json")
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a well-formed batch must not break the transport: got HTTP %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "invalid_json") {
+		t.Fatalf("a JSON array is valid JSON; the refusal must say what it really is: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "batch_not_supported") {
+		t.Fatalf("expected batch_not_supported, got %s", rec.Body.String())
+	}
+}
+
+// The third case of the same shape. A body that arrives intact but is not a valid
+// JSON-RPC request is the envelope's business, not the transport's.
+func TestInvalidRequestIsAnsweredOverHTTP200(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_probe"}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"id":1,"method":"tools/list"}`))
+	req.Header.Set("Content-Type", "application/json")
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a body that arrived intact must not break the transport: got HTTP %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "-32600") {
+		t.Fatalf("expected JSON-RPC -32600 Invalid Request, got %s", rec.Body.String())
+	}
+}
+
+// The front door answers arrivals instead of refusing them.
+//
+// 611 requests reached `/` and every one got "route not found", 485 of them from
+// browsers. A JSON-RPC error is the right answer to a bad RPC call and the wrong one
+// to someone who pasted the hostname in.
+func TestRootIndexAnswersBothKindsOfVisitor(t *testing.T) {
+	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_probe"}})
+
+	t.Run("a browser gets a page", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Accept", "text/html,application/xhtml+xml")
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got HTTP %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "<title>") {
+			t.Fatalf("expected HTML for a browser, got %s", rec.Body.String()[:200])
+		}
+	})
+
+	t.Run("a machine gets the same facts as JSON", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		server.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got HTTP %d", rec.Code)
+		}
+		body := rec.Body.String()
+		for _, want := range []string{"mcp.kenwea.com/mcp/v1", "com.kenwea.www/marketplace", "registerSelf"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("root index must state %q; got %s", want, body)
+			}
+		}
+	})
+
+	// The page must not outrun the server: every protocol revision it advertises has
+	// to be one the request handler actually accepts.
+	t.Run("advertised protocol revisions are the accepted ones", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		server.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		for _, v := range SupportedProtocolVersionList() {
+			if !strings.Contains(rec.Body.String(), v) {
+				t.Fatalf("root index omits accepted revision %s", v)
+			}
+			if !supportedProtocolVersions[v] {
+				t.Fatalf("root index advertises %s which the handler rejects", v)
+			}
+		}
+	})
 }

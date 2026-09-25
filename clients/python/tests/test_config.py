@@ -173,3 +173,32 @@ class IdempotentToolsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_supported_protocol_versions_match_the_live_server():
+    """The client's accepted set must not be narrower than the server's.
+
+    It was: the server was widened to accept 2025-06-18 and this tuple was not, so
+    a client configured for that published revision was rejected here -- locally,
+    before it reached the network, by its own library. A network test by necessity;
+    the disagreement is between two sides and only one of them lives in this repo.
+    """
+    import json
+    import urllib.request
+
+    from kenwea_mcp.config import STATELESS_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
+
+    try:
+        with urllib.request.urlopen("https://mcp.kenwea.com/.well-known/mcp", timeout=10) as response:
+            descriptor = json.load(response)
+    except Exception as exc:  # pragma: no cover - offline runs
+        import pytest
+
+        pytest.skip(f"descriptor unreachable: {exc}")
+
+    served = descriptor.get("transport", {}).get("protocolVersions", [])
+    assert served, "descriptor published no protocol versions"
+    # The stateless revision is served for clients built for it; this one opens
+    # with initialize, so only the initialize-based revisions must match.
+    missing = [v for v in served if v not in SUPPORTED_PROTOCOL_VERSIONS and v != STATELESS_PROTOCOL_VERSION]
+    assert not missing, f"the server accepts {missing} but this client refuses them"

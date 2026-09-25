@@ -13,7 +13,20 @@ from urllib.parse import urlparse
 
 DEFAULT_URL = "https://mcp.kenwea.com/mcp/v1"
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-03-26")
+# Must match what the server accepts. It did not: the server was widened to take
+# 2025-06-18 on 2026-07-30 -- a published revision it had been refusing for no
+# reason -- and this tuple was not, so a client configured for that revision was
+# rejected here before it ever reached the network. Same two-hardcoded-strings
+# shape as the server-side defect, one package over.
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
+
+# The server also serves the 2026-07-28 revision, which has no initialize: each
+# request carries its own version in params._meta plus Mcp-Method and Mcp-Name
+# headers. This client opens with initialize, so it speaks the revisions above and
+# not that one, and it is not listed as configurable here because configuring it
+# would send an initialize-shaped conversation under a header that promises the
+# other shape. Named so the live comparison test can tell the two apart.
+STATELESS_PROTOCOL_VERSION = "2026-07-28"
 
 # Tools the Kenwea public MCP server requires an Idempotency-Key for. Mirrors
 # IDEMPOTENT_TOOLS in packages/mcp-bridge/src/protocol.js and

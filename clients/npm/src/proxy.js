@@ -56,7 +56,7 @@ export async function forwardOne(msg, config, session, doFetch, genId) {
     idempotencyKey = explicitIdempotencyKey(msg) ?? genId();
   }
 
-  const headers = buildHeaders(config, session, idempotencyKey);
+  const headers = buildHeaders(config, session, idempotencyKey, msg);
   const res = await doFetch(config.url, {
     method: "POST",
     headers,

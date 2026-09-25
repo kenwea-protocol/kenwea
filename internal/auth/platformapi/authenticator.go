@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,12 +18,38 @@ import (
 type Authenticator struct {
 	BaseURL string
 	Client  *http.Client
+	// ToolClient carries forwarded tool calls. It is separate from Client on
+	// purpose: identifying a caller is a lookup that should be fast or fail,
+	// while a forwarded tool may legitimately take a long time.
+	ToolClient *http.Client
 }
+
+// authTimeout bounds /internal/mcp/identify. Five seconds is generous for a
+// lookup and the right thing to give up on.
+const authTimeout = 5 * time.Second
+
+// toolTimeout bounds a forwarded tool call, and it is set by the slowest tool
+// rather than the average one.
+//
+// This was 5s for everything, which silently broke kenwea.sandbox.check on any
+// artifact that took longer than that: fetch, scan, base64, hand to the runner,
+// docker run. Small files finished in time and large ones did not, so the tool
+// looked size-limited when it was actually time-limited -- and the caller was
+// told "platform api is temporarily unavailable", which blames our
+// infrastructure for a budget we set. Measured 2026-08-08: left-pad at 1.4KB
+// passed while Sentry's 1.58MB bundle failed, as did a 37KB package that was
+// merely slow to execute.
+//
+// The sandbox's own budget is 15s for a file and 45s for a package, and the
+// runner client allows another 10s on top, so this has to sit above that or the
+// timeout fires in the wrong place and reports the wrong thing.
+const toolTimeout = 90 * time.Second
 
 func New(baseURL string) Authenticator {
 	return Authenticator{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Client:  &http.Client{Timeout: 5 * time.Second},
+		BaseURL:    strings.TrimRight(baseURL, "/"),
+		Client:     &http.Client{Timeout: authTimeout},
+		ToolClient: &http.Client{Timeout: toolTimeout},
 	}
 }
 
@@ -72,6 +99,16 @@ func (a Authenticator) client() *http.Client {
 	return http.DefaultClient
 }
 
+// toolClient is what forwarded tool calls use. Falling back to client() rather
+// than http.DefaultClient keeps every existing test that only sets Client
+// working, and keeps an unbounded default from creeping in.
+func (a Authenticator) toolClient() *http.Client {
+	if a.ToolClient != nil {
+		return a.ToolClient
+	}
+	return a.client()
+}
+
 func (a Authenticator) ForwardTool(r *http.Request, method string, params json.RawMessage) (map[string]any, error) {
 	httpMethod, path, body, err := route(method, params)
 	if err != nil {
@@ -83,13 +120,20 @@ func (a Authenticator) ForwardTool(r *http.Request, method string, params json.R
 	}
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
 	req.Header.Set("X-Correlation-ID", r.Header.Get("X-Correlation-ID"))
-	if key := r.Header.Get("Idempotency-Key"); key != "" {
+	// Must mirror mcp.idempotencyKey exactly: the gate in front of this accepts the
+	// key from either the header or the params, so reading only the header here would
+	// let a call past the gate and then have the platform refuse it for a missing key.
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		key = mcp.IdempotencyKeyFromParams(params)
+	}
+	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := a.client().Do(req)
+	resp, err := a.toolClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +173,13 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 	case "kenwea.agent.heartbeat":
 		return http.MethodPost, "/agent/heartbeat", nil, nil
 	case "kenwea.marketplace.search":
-		return http.MethodGet, "/products", nil, nil
+		// The params were previously dropped on the floor: this returned "/products"
+		// with no query string, so every search returned the same unfiltered first
+		// page regardless of what the caller asked for. Not a rejection -- a silent
+		// one, which is worse, because the caller gets a plausible answer to a
+		// question it did not ask. GET /products reads q, category, minPriceCents,
+		// maxPriceCents, sort, limit and offset; all seven now arrive.
+		return http.MethodGet, "/products" + searchQuery(params), nil, nil
 	case "kenwea.marketplace.preview":
 		return http.MethodPost, "/agent/products/preview", bytes.NewReader(params), nil
 	case "kenwea.marketplace.publish":
@@ -156,6 +206,8 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 			return "", "", nil, errors.New("jobId is required")
 		}
 		return http.MethodGet, "/agent/jobs/" + url.PathEscape(id), nil, nil
+	case "kenwea.sandbox.check":
+		return http.MethodPost, "/agent/sandbox/check", bytes.NewReader(params), nil
 	case "kenwea.orders.listRequests":
 		return http.MethodGet, "/orders", nil, nil
 	case "kenwea.orders.submitBid":
@@ -213,6 +265,59 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 	default:
 		return "", "", nil, errors.New("tool is not forwardable")
 	}
+}
+
+// searchQuery converts kenwea.marketplace.search arguments into the query string
+// GET /products expects, and returns "" when nothing usable was supplied.
+//
+// Only the seven parameters the platform handler actually reads are forwarded. An
+// unrecognised argument is dropped rather than passed through, so a caller cannot
+// smuggle a filter the schema does not declare.
+//
+// Numbers arrive as JSON numbers, so they are decoded as such and re-rendered; taking
+// them as strings would have made the schema lie about their type.
+func searchQuery(params json.RawMessage) string {
+	if len(params) == 0 || string(params) == "null" {
+		return ""
+	}
+	var body struct {
+		Q             string `json:"q"`
+		Category      string `json:"category"`
+		MinPriceCents *int64 `json:"minPriceCents"`
+		MaxPriceCents *int64 `json:"maxPriceCents"`
+		Sort          string `json:"sort"`
+		Limit         *int   `json:"limit"`
+		Offset        *int   `json:"offset"`
+	}
+	if err := json.Unmarshal(params, &body); err != nil {
+		return ""
+	}
+	values := url.Values{}
+	for key, value := range map[string]string{
+		"q":        strings.TrimSpace(body.Q),
+		"category": strings.TrimSpace(body.Category),
+		"sort":     strings.TrimSpace(body.Sort),
+	} {
+		if value != "" {
+			values.Set(key, value)
+		}
+	}
+	if body.MinPriceCents != nil {
+		values.Set("minPriceCents", strconv.FormatInt(*body.MinPriceCents, 10))
+	}
+	if body.MaxPriceCents != nil {
+		values.Set("maxPriceCents", strconv.FormatInt(*body.MaxPriceCents, 10))
+	}
+	if body.Limit != nil {
+		values.Set("limit", strconv.Itoa(*body.Limit))
+	}
+	if body.Offset != nil {
+		values.Set("offset", strconv.Itoa(*body.Offset))
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return "?" + values.Encode()
 }
 
 func paramValue(params json.RawMessage, key string) string {

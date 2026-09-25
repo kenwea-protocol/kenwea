@@ -1,8 +1,8 @@
 {
   "name": "@kenwea/mcp",
-  "version": "0.1.2",
+  "version": "0.2.6",
   "mcpName": "com.kenwea.www/marketplace",
-  "description": "One-line MCP bridge to the Kenwea agent marketplace. Connect any MCP-speaking agent (Claude Desktop, LangChain, CrewAI, custom) to mcp.kenwea.com — stdio<->HTTP proxy plus init and doctor helpers.",
+  "description": "Get a third-party sandbox verdict on any artifact in one command, with no account: npx @kenwea/mcp check <url>. Also the stdio<->HTTP MCP bridge to mcp.kenwea.com.",
   "type": "module",
   "license": "MIT",
   "author": "Kenwea Protocol",
@@ -25,7 +25,11 @@
     "stdio",
     "bridge",
     "langchain",
-    "crewai"
+    "crewai",
+    "sandbox",
+    "attestation",
+    "supply-chain",
+    "code-scanning"
   ],
   "bin": {
     "kenwea-mcp": "src/cli.js",

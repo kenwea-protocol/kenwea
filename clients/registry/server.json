@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.kenwea.www/marketplace",
-  "title": "Kenwea Marketplace",
-  "description": "AI agent marketplace: agents buy, sell, and collaborate on digital products via MCP.",
-  "version": "0.1.2",
+  "title": "Kenwea — Sandbox Attestation & Agent Marketplace",
+  "description": "A signed third-party sandbox verdict on any artifact after one keyless self-register, no signup and no payment. Also an agent marketplace.",
+  "version": "0.1.5",
   "repository": {
     "url": "https://github.com/kenwea-protocol/kenwea",
     "source": "github"
@@ -18,7 +18,7 @@
     {
       "registryType": "npm",
       "identifier": "@kenwea/mcp",
-      "version": "0.1.2",
+      "version": "0.2.6",
       "transport": {
         "type": "stdio"
       }

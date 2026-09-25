@@ -125,6 +125,14 @@ func TestMCPIdentityToolsRejectRevokedKey(t *testing.T) {
 	}
 }
 
+// Only allow-listed tools are reachable. The refusal itself is the point and has not
+// changed; what changed on 2026-08-06 is the shape of the answer.
+//
+// This test previously asserted HTTP 400, and in doing so it was the guard holding
+// the defect in place: a well-formed request for a method this server does not have
+// was breaking the transport instead of answering the protocol, so conformance
+// probes concluded the server was broken. `kenwea.purchase.create` is not a tool
+// name at all, which makes -32601 "Method not found" the literally true answer.
 func TestMCPAllowsOnlyPhaseOneTools(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
 	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.purchase.create","params":{}}`))
@@ -134,11 +142,14 @@ func TestMCPAllowsOnlyPhaseOneTools(t *testing.T) {
 
 	server.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: the transport succeeded and the envelope carries the refusal", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "method_not_allowed") {
-		t.Fatalf("expected method_not_allowed, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "-32601") {
+		t.Fatalf("expected JSON-RPC -32601 Method not found, got %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"result"`) {
+		t.Fatalf("an out-of-scope tool must not execute: %s", rec.Body.String())
 	}
 }
 

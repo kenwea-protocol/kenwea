@@ -106,23 +106,78 @@ function readMetaKey(container) {
 }
 
 /**
+ * The protocol revision a message names for itself in `params._meta`, which only
+ * requests under the 2026-07-28 revision do. Null for everything else.
+ * @param {any} msg
+ * @returns {string|null}
+ */
+export function messageProtocolVersion(msg) {
+  const meta =
+    msg && typeof msg === "object" && msg.params && typeof msg.params === "object"
+      ? msg.params._meta
+      : undefined;
+  if (!meta || typeof meta !== "object") return null;
+  const version = meta["io.modelcontextprotocol/protocolVersion"];
+  return typeof version === "string" && version ? version : null;
+}
+
+/**
+ * Encode a header value the way the 2026-07-28 revision specifies when it is not
+ * header-safe: `=?base64?<value>?=`. Plain printable ASCII without surrounding
+ * spaces is sent as it is.
+ * @param {string} value
+ * @returns {string}
+ */
+export function encodeHeaderValue(value) {
+  if (/^[\x21-\x7E](?:[\x20-\x7E]*[\x21-\x7E])?$/.test(value)) return value;
+  return `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+/**
+ * The routing headers the 2026-07-28 revision requires: Mcp-Method on every
+ * request, and Mcp-Name for the three methods that address something by name.
+ * @param {any} msg
+ * @returns {Record<string,string>}
+ */
+export function routingHeaders(msg) {
+  /** @type {Record<string,string>} */
+  const headers = {};
+  if (!msg || typeof msg !== "object" || typeof msg.method !== "string") return headers;
+  headers["Mcp-Method"] = encodeHeaderValue(msg.method);
+  const params = msg.params && typeof msg.params === "object" ? msg.params : {};
+  let name;
+  if (msg.method === "tools/call" || msg.method === "prompts/get") name = params.name;
+  if (msg.method === "resources/read") name = params.uri;
+  if (typeof name === "string" && name) headers["Mcp-Name"] = encodeHeaderValue(name);
+  return headers;
+}
+
+/**
  * Build the HTTP headers for a forwarded request. The api key is only attached as
  * a Bearer token; it is never placed anywhere loggable.
+ *
+ * When `msg` is a request under the 2026-07-28 revision, the version header is the
+ * one the message names, the routing headers are added, and no session id is sent,
+ * because that revision has no sessions. Otherwise the headers are exactly what they
+ * were before that revision existed.
  * @param {BridgeConfig} config
  * @param {{sessionId: string|null}} session
  * @param {string|null} [idempotencyKey]
+ * @param {any} [msg]
  * @returns {Record<string,string>}
  */
-export function buildHeaders(config, session, idempotencyKey = null) {
+export function buildHeaders(config, session, idempotencyKey = null, msg = undefined) {
+  const statelessVersion = messageProtocolVersion(msg);
   /** @type {Record<string,string>} */
   const headers = {
     "content-type": "application/json",
     accept: "application/json",
-    "MCP-Protocol-Version": config.protocolVersion,
+    "MCP-Protocol-Version": statelessVersion ?? config.protocolVersion,
   };
   if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
-  if (session.sessionId) headers["Mcp-Session-Id"] = session.sessionId;
+  if (session.sessionId && !statelessVersion) headers["Mcp-Session-Id"] = session.sessionId;
   if (config.correlationId) headers["X-Correlation-ID"] = config.correlationId;
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  if (statelessVersion) Object.assign(headers, routingHeaders(msg));
   return headers;
 }

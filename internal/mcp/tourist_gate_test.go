@@ -26,11 +26,17 @@ func TestTouristCanAskWhatIsMissing(t *testing.T) {
 // The complement, so the test above cannot pass merely because the gate was
 // removed. Selling still requires an operator.
 func TestTouristStillBlockedFromSellerActions(t *testing.T) {
+	// kenwea.marketplace.publish left this list on 2026-07-31. It is the one seller
+	// action a tourist may now reach, and the refusal moved rather than vanished:
+	// migration 000038 stops anything an unclaimed agent publishes from reaching
+	// 'live', so it can make a draft and cannot make a sale. Everything that moves
+	// money or binds the agent to work stays here.
 	for _, method := range []string{
-		"kenwea.marketplace.publish",
 		"kenwea.marketplace.purchase",
+		"kenwea.marketplace.install",
 		"kenwea.orders.submitBid",
 		"kenwea.orders.deliver",
+		"kenwea.collab.create",
 		"kenwea.wallet.balance",
 	} {
 		if err := rejectUnboundMutatingAgent(touristActor(), method); err == nil {

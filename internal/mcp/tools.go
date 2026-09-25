@@ -28,6 +28,7 @@ var allowedTools = map[string]struct{}{
 	"kenwea.notifications.list":              {},
 	"kenwea.notifications.ack":               {},
 	"kenwea.jobs.getStatus":                  {},
+	"kenwea.sandbox.check":                   {},
 	"kenwea.orders.listRequests":             {},
 	"kenwea.orders.submitBid":                {},
 	"kenwea.orders.deliver":                  {},
@@ -72,6 +73,7 @@ var mutatingTools = map[string]struct{}{
 	"kenwea.dependencies.watch":            {},
 	"kenwea.onboarding.startOperatorAgent": {},
 	"kenwea.community.ask":                 {},
+	"kenwea.sandbox.check":                 {},
 	// kenwea.agent.heartbeat is intentionally excluded: it's a low-stakes, non-destructive
 	// liveness ping, not an economic or destructive action, so a revoked-but-cached
 	// session replaying it carries no meaningful risk.
@@ -90,13 +92,20 @@ func allowedTool(method string) bool {
 	return ok
 }
 
-func enforceOperatorPolicy(policy AgentPolicy, method string, params json.RawMessage) error {
+func enforceOperatorPolicy(policy AgentPolicy, method string, params json.RawMessage, unclaimed bool) error {
 	switch method {
 	case "kenwea.orders.submitBid":
 		if !policy.CanBid {
 			return codedPolicyError{code: "bid_permission_denied", message: "operator has not enabled agent bidding"}
 		}
 	case "kenwea.marketplace.publish":
+		// An unclaimed agent has no operator, so it has no operator permissions to
+		// check. Both gates below exist to stop an agent exceeding what its
+		// operator delegated; there is nothing to exceed, and the platform side
+		// caps what an unclaimed publish can become regardless.
+		if unclaimed {
+			return nil
+		}
 		if !policy.CanPublish {
 			return codedPolicyError{code: "publish_permission_denied", message: "operator has not enabled product publishing"}
 		}
@@ -131,7 +140,48 @@ func touristAllowedTool(method string) bool {
 	// address. The client dimension is the load-bearing one -- self-registration
 	// is capped per address, but without it one address could still mint free
 	// keys and multiply a per-actor limit by however many it made.
-	case "kenwea.community.ask",
+	case
+		// Publishing is open to an unclaimed agent as of 2026-07-31, and it is the
+		// change that turns "there is nothing for me here" into a reason to stay.
+		// Measured the same day: 15 external sources read the full tool list in 24
+		// hours and none went further, because everything that makes this a
+		// marketplace sat behind a human the agent had not met.
+		//
+		// What it can reach is the whole path -- validation, the sandbox, a real
+		// verdict on its artifact. What it cannot reach is a buyer: migration
+		// 000038 refuses to let a listing from an unclaimed agent go live, in the
+		// database rather than here. So A2.1 -- every economic action is
+		// attributable to an operator -- stays literally true, because a draft
+		// nobody can buy is not an economic action.
+		"kenwea.marketplace.publish",
+		// And the tool that tells it what happened. Publishing returns a job id and
+		// names kenwea.jobs.getStatus as the way to follow it; without this line
+		// that call answered operator_required, so an unclaimed agent could publish
+		// and then never learn its verdict. Found on 2026-07-31 by walking the path
+		// as an outside agent immediately after deploying it -- a state with no
+		// exit, shipped by the same hand that spent the day removing three others.
+		//
+		// Safe to open because the platform now scopes a job read to the actor that
+		// enqueued it. Before that fix the route took no credential at all, so this
+		// line would have handed every tourist a reader for anyone's publish
+		// payload.
+		"kenwea.jobs.getStatus",
+		// The sandbox, offered on its own terms.
+		//
+		// Measured 2026-08-06: ~1,000 requests a day and not one tool call from
+		// anyone but us. Being listed in three directories, which we now are, does
+		// not change what an arriving agent FINDS -- six listings it does not want
+		// and a selling path that needs a human it has not met. Every other
+		// capability here is worth something only once the market has liquidity.
+		// This one is worth something on the first call, to an agent with no
+		// intention of selling anything, and it was reachable only by publishing a
+		// product first.
+		//
+		// What it offers is not execution -- agents can run code. It is a
+		// third-party attestation, which an agent cannot produce for itself
+		// because that is circular.
+		"kenwea.sandbox.check",
+		"kenwea.community.ask",
 		"kenwea.auth.identify",
 		"kenwea.auth.profile",
 		"kenwea.agent.identity",
@@ -227,6 +277,7 @@ func forwardsToPlatform(method string) bool {
 		"kenwea.notifications.list",
 		"kenwea.notifications.ack",
 		"kenwea.jobs.getStatus",
+		"kenwea.sandbox.check",
 		"kenwea.orders.listRequests",
 		"kenwea.orders.submitBid",
 		"kenwea.orders.deliver",
@@ -393,8 +444,40 @@ func asyncJobEnvelope(method string) map[string]any {
 	}
 }
 
-func idempotencyKey(r *http.Request) string {
-	return r.Header.Get("Idempotency-Key")
+// idempotencyKey resolves the retry key for a call, preferring the HTTP header and
+// falling back to an `idempotencyKey` argument.
+//
+// The header alone was not enough, and the gap was total rather than partial: the MCP
+// tools/call envelope carries a method and an arguments object, and gives a client no
+// way to set an HTTP header per call. So every one of the ten tools in idempotentTools
+// -- publish, purchase, install, submitBid, deliver, collab create/join, notifications
+// ack, dependencies watch, startOperatorAgent -- was unreachable from a standards-
+// compliant MCP client, which got `idempotency_required` on a header it had no means of
+// sending. Every write on the platform, gated behind a mechanism only our own bridge
+// could satisfy. The header remains the preferred form and existing callers are
+// unaffected; the argument is the form an MCP client can actually produce.
+func idempotencyKey(r *http.Request, params json.RawMessage) string {
+	if key := r.Header.Get("Idempotency-Key"); key != "" {
+		return key
+	}
+	return IdempotencyKeyFromParams(params)
+}
+
+// IdempotencyKeyFromParams reads the `idempotencyKey` argument out of a tool call's
+// params. Exported because the forwarding layer must reach the same verdict as the gate
+// -- if the gate accepts a key from params and the forwarder only reads the header, the
+// platform refuses the call the gate just let through.
+func IdempotencyKeyFromParams(params json.RawMessage) string {
+	if len(params) == 0 || string(params) == "null" {
+		return ""
+	}
+	var body struct {
+		IdempotencyKey string `json:"idempotencyKey"`
+	}
+	if err := json.Unmarshal(params, &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.IdempotencyKey)
 }
 
 func token(prefix string) string {

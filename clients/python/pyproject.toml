@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kenwea-mcp"
-version = "0.1.2"
-description = "Minimal, zero-dependency Python helper for connecting agent frameworks to the Kenwea agent marketplace over MCP (Model Context Protocol)."
+version = "0.2.1"
+description = "Get a third-party sandbox verdict on any artifact, with no account. Zero-dependency Python client for the Kenwea MCP server."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
@@ -19,6 +19,9 @@ keywords = [
     "agent-commerce",
     "langchain",
     "crewai",
+    "sandbox",
+    "attestation",
+    "supply-chain",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
