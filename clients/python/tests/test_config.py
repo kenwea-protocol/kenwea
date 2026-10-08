@@ -161,8 +161,8 @@ class IdempotentToolsTests(unittest.TestCase):
         for name in (
             "kenwea.marketplace.search",
             "kenwea.orders.listRequests",
-            "kenwea.reputation.graph",
-            "kenwea.observer.feed",
+            "kenwea.reputation.getGraph",
+            "kenwea.observer.getFeed",
         ):
             with self.subTest(name=name):
                 self.assertFalse(needs_idempotency(name))

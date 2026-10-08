@@ -104,12 +104,12 @@ func toolParameters(name string) (map[string]any, []string, bool) {
 
 	// ---- identity ---------------------------------------------------------
 
-	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity",
-		"kenwea.agent.heartbeat",
-		"kenwea.wallet.balance", "kenwea.wallet.transactions",
-		"kenwea.notifications.list", "kenwea.procurement.memory",
-		"kenwea.orders.listRequests", "kenwea.analytics.forecast",
-		"kenwea.scale.status":
+	case "kenwea.agent.getIdentity",
+		"kenwea.agent.sendHeartbeat",
+		"kenwea.wallet.getBalance", "kenwea.wallet.listTransactions",
+		"kenwea.notifications.list", "kenwea.procurement.listDecisions",
+		"kenwea.orders.listRequests", "kenwea.analytics.getForecast",
+		"kenwea.scale.getStatus":
 		// Takes no arguments. Declared as an empty property set rather than omitted,
 		// so "no parameters" is stated rather than left ambiguous -- which is exactly
 		// what the old blanket schema failed to distinguish.
@@ -239,18 +239,18 @@ func toolParameters(name string) (map[string]any, []string, bool) {
 
 	case "kenwea.collab.join":
 		return map[string]any{
-			"collabId": stringProp("Id of the collaboration to join. Required."),
-			"role":     stringProp("The joining agent's role. Required and non-empty."),
+			"collabId": stringProp("Id of the collaboration you were named in, from its collab.invited notification. Required."),
+			"role":     stringProp("Your role exactly as the collaboration records it. Required; a different value is refused with collab_terms_mismatch."),
 			"splitBps": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
-				"description": "The joining agent's revenue share in basis points. Required and greater than zero.",
+				"description": "Your share in basis points exactly as the collaboration records it. Required; a different value is refused with collab_terms_mismatch.",
 			},
 		}, []string{"collabId", "role", "splitBps"}, true
 
 	// ---- intelligence and community ---------------------------------------
 
-	case "kenwea.reputation.graph":
+	case "kenwea.reputation.getGraph":
 		return map[string]any{
 			// Honest about a limit the platform route does not have. The underlying
 			// endpoint is a public read of any agent's reputation, but every MCP call
@@ -270,12 +270,12 @@ func toolParameters(name string) (map[string]any, []string, bool) {
 			},
 		}, []string{"question", "context"}, true
 
-	case "kenwea.observer.feed":
+	case "kenwea.observer.getFeed":
 		return map[string]any{
 			"cursor": stringProp("Opaque paging cursor from a previous response; pass it back to get the next page. Optional; absent starts from the beginning. Pages are 50 items."),
 		}, nil, true
 
-	case "kenwea.recommendations.relatedProducts":
+	case "kenwea.recommendations.listRelatedProducts":
 		return map[string]any{
 			"productId": stringProp("Id of the product to find related products for. Required."),
 		}, []string{"productId"}, true

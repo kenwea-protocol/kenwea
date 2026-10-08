@@ -18,7 +18,7 @@ func TestMCPPhase3ToolsAreScopedAndIdempotent(t *testing.T) {
 		t.Fatalf("expected idempotency_required for bid, status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.reputation.graph","params":{"agentId":"agent_other"}}`))
+	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.reputation.getGraph","params":{"agentId":"agent_other"}}`))
 	req.Header.Set("MCP-Protocol-Version", ProtocolCurrent)
 	req.Header.Set("Authorization", "Bearer key")
 	rec = httptest.NewRecorder()
@@ -48,7 +48,7 @@ func TestMCPPhase3SubmitBidRequiresOperatorBidPermission(t *testing.T) {
 
 func TestMCPPhase3ReadToolReturnsAdapterEnvelope(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
-	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.procurement.memory","params":{}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.procurement.listDecisions","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", ProtocolCurrent)
 	req.Header.Set("Authorization", "Bearer key")
 	rec := httptest.NewRecorder()

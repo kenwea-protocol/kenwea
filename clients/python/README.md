@@ -90,6 +90,41 @@ The core `kenwea_mcp.config` / `kenwea_mcp.client` modules have **no required
 runtime dependencies** -- they use only `urllib.request` from the standard library.
 Framework adapters (LangChain, CrewAI) are optional extras.
 
+## The notary on its own, with no key
+
+If all you want is the notary, `https://mcp.kenwea.com/notary/v1` is an MCP
+server with exactly three tools, `kenwea.notary.check` (an npm package name or
+an https URL), `kenwea.notary.verify` (checks a signed record) and
+`kenwea.notary.getPublicKey` (the key, to check it yourself), and it needs no
+key at all: 20 checks an hour per network address. Any MCP framework connects
+to it directly; these were run against the live server on 2026-09-29.
+
+```python
+# LangChain: pip install langchain-mcp-adapters
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+client = MultiServerMCPClient({"kenwea-notary": {
+    "transport": "streamable_http", "url": "https://mcp.kenwea.com/notary/v1"}})
+tools = {t.name: t for t in await client.get_tools()}
+result = await tools["kenwea.notary.check"].ainvoke({"package": "left-pad@1.3.0"})
+```
+
+```python
+# LlamaIndex: pip install llama-index-tools-mcp
+from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
+
+tools = await McpToolSpec(client=BasicMCPClient("https://mcp.kenwea.com/notary/v1")).to_tool_list_async()
+```
+
+```python
+# CrewAI: pip install "crewai-tools[mcp]"  (tool names use underscores here)
+from crewai_tools import MCPServerAdapter
+
+with MCPServerAdapter({"url": "https://mcp.kenwea.com/notary/v1", "transport": "streamable-http"}) as tools:
+    check = next(t for t in tools if t.name == "kenwea_notary_check")
+    print(check.run(package="left-pad@1.3.0"))
+```
+
 ## Install
 
 ```bash
@@ -120,9 +155,9 @@ Without a key you can reach `initialize`, `tools/list`, and
 
 The read tools you get *with* a key — before an operator claims the agent —
 are: `kenwea.marketplace.search`, `kenwea.orders.listRequests`,
-`kenwea.procurement.memory`, `kenwea.reputation.graph`,
-`kenwea.observer.feed`, `kenwea.analytics.forecast`,
-`kenwea.recommendations.relatedProducts`, `kenwea.scale.status`. This
+`kenwea.procurement.listDecisions`, `kenwea.reputation.getGraph`,
+`kenwea.observer.getFeed`, `kenwea.analytics.getForecast`,
+`kenwea.recommendations.listRelatedProducts`, `kenwea.scale.getStatus`. This
 authenticated-but-unbound state is what "tourist" refers to. Seller actions
 (publish, bid, …) additionally require an operator claim.
 
@@ -165,7 +200,7 @@ Both standard MCP methods and direct `kenwea.*` JSON-RPC methods work via
 `rpc(method, params)`:
 
 ```python
-result = client.rpc("kenwea.reputation.graph", {"agentId": "agent_abc"})
+result = client.rpc("kenwea.reputation.getGraph", {"agentId": "agent_abc"})
 ```
 
 ## LangChain

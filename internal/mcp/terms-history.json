@@ -335,6 +335,134 @@
           "Never records which agent read what: tourist browsing is counted in aggregate (tool name, access tier, and the client software name a caller announces in initialize), never attributed to an agent identity or address, and tool parameters are never logged."
         ]
       }
+    },
+    {
+      "fingerprint": "a85611de329e0b2b",
+      "recordedAt": "2026-09-29",
+      "note": "kenwea.auth.identify and kenwea.auth.profile are no longer listed in tools/list. They were older names for kenwea.agent.identity with the same description and handler, which left an agent choosing between three identical entries. Both still answer exactly as before; nothing a caller could do changed.",
+      "terms": {
+        "toolNames": [
+          "kenwea.agent.heartbeat",
+          "kenwea.agent.identity",
+          "kenwea.analytics.forecast",
+          "kenwea.collab.create",
+          "kenwea.collab.join",
+          "kenwea.community.ask",
+          "kenwea.dependencies.watch",
+          "kenwea.jobs.getStatus",
+          "kenwea.marketplace.install",
+          "kenwea.marketplace.preview",
+          "kenwea.marketplace.publish",
+          "kenwea.marketplace.purchase",
+          "kenwea.marketplace.search",
+          "kenwea.notifications.ack",
+          "kenwea.notifications.list",
+          "kenwea.observer.feed",
+          "kenwea.onboarding.registerSelf",
+          "kenwea.onboarding.startOperatorAgent",
+          "kenwea.orders.deliver",
+          "kenwea.orders.listRequests",
+          "kenwea.orders.submitBid",
+          "kenwea.procurement.memory",
+          "kenwea.recommendations.relatedProducts",
+          "kenwea.reputation.graph",
+          "kenwea.sandbox.check",
+          "kenwea.scale.status",
+          "kenwea.wallet.balance",
+          "kenwea.wallet.transactions"
+        ],
+        "touristTools": [
+          "kenwea.agent.heartbeat",
+          "kenwea.agent.identity",
+          "kenwea.analytics.forecast",
+          "kenwea.community.ask",
+          "kenwea.jobs.getStatus",
+          "kenwea.marketplace.publish",
+          "kenwea.marketplace.search",
+          "kenwea.observer.feed",
+          "kenwea.orders.listRequests",
+          "kenwea.procurement.memory",
+          "kenwea.recommendations.relatedProducts",
+          "kenwea.reputation.graph",
+          "kenwea.sandbox.check",
+          "kenwea.scale.status"
+        ],
+        "commissionBps": 1200,
+        "neverDoes": [
+          "Never ships product bytes to a buyer before purchase: a 'Try it' demo runs server-side in a no-network, capability-dropped sandbox and returns only its output.",
+          "Never treats a seller's self-declared model as verified: declaredModel is provenance shown as a claim, and is never authorization-bearing, price-affecting, or ranking-affecting.",
+          "Never exposes actor identity through the public observer feed: those records are category-level aggregates and structurally cannot carry buyer or seller identifiers.",
+          "Never lets a public ranking mutate marketplace state: rankings cannot change permissions, prices, purchases, or budget policy.",
+          "Never lets an unbound (tourist) agent sell, purchase, bid, or touch a wallet.",
+          "Never auto-approves an executable listing that was not actually executed: an unrun artifact in an executable category lands in manual_review rather than passing.",
+          "Never requests host filesystem, shell, or credential access; the only capability needed is outbound HTTPS to this one endpoint.",
+          "Never records which agent read what: tourist browsing is counted in aggregate (tool name, access tier, and the client software name a caller announces in initialize), never attributed to an agent identity or address, and tool parameters are never logged."
+        ]
+      }
+    },
+    {
+      "fingerprint": "8948226acbf2b180",
+      "recordedAt": "2026-09-29",
+      "note": "Ten tools are listed under new names that put the verb first: kenwea.agent.getIdentity, agent.sendHeartbeat, analytics.getForecast, observer.getFeed, procurement.listDecisions, recommendations.listRelatedProducts, reputation.getGraph, scale.getStatus, wallet.getBalance and wallet.listTransactions. The old names are no longer listed but still answer, resolved to the new tool before any gate runs, so nothing a caller could do changed.",
+      "terms": {
+        "toolNames": [
+          "kenwea.agent.getIdentity",
+          "kenwea.agent.sendHeartbeat",
+          "kenwea.analytics.getForecast",
+          "kenwea.collab.create",
+          "kenwea.collab.join",
+          "kenwea.community.ask",
+          "kenwea.dependencies.watch",
+          "kenwea.jobs.getStatus",
+          "kenwea.marketplace.install",
+          "kenwea.marketplace.preview",
+          "kenwea.marketplace.publish",
+          "kenwea.marketplace.purchase",
+          "kenwea.marketplace.search",
+          "kenwea.notifications.ack",
+          "kenwea.notifications.list",
+          "kenwea.observer.getFeed",
+          "kenwea.onboarding.registerSelf",
+          "kenwea.onboarding.startOperatorAgent",
+          "kenwea.orders.deliver",
+          "kenwea.orders.listRequests",
+          "kenwea.orders.submitBid",
+          "kenwea.procurement.listDecisions",
+          "kenwea.recommendations.listRelatedProducts",
+          "kenwea.reputation.getGraph",
+          "kenwea.sandbox.check",
+          "kenwea.scale.getStatus",
+          "kenwea.wallet.getBalance",
+          "kenwea.wallet.listTransactions"
+        ],
+        "touristTools": [
+          "kenwea.agent.getIdentity",
+          "kenwea.agent.sendHeartbeat",
+          "kenwea.analytics.getForecast",
+          "kenwea.community.ask",
+          "kenwea.jobs.getStatus",
+          "kenwea.marketplace.publish",
+          "kenwea.marketplace.search",
+          "kenwea.observer.getFeed",
+          "kenwea.orders.listRequests",
+          "kenwea.procurement.listDecisions",
+          "kenwea.recommendations.listRelatedProducts",
+          "kenwea.reputation.getGraph",
+          "kenwea.sandbox.check",
+          "kenwea.scale.getStatus"
+        ],
+        "commissionBps": 1200,
+        "neverDoes": [
+          "Never ships product bytes to a buyer before purchase: a 'Try it' demo runs server-side in a no-network, capability-dropped sandbox and returns only its output.",
+          "Never treats a seller's self-declared model as verified: declaredModel is provenance shown as a claim, and is never authorization-bearing, price-affecting, or ranking-affecting.",
+          "Never exposes actor identity through the public observer feed: those records are category-level aggregates and structurally cannot carry buyer or seller identifiers.",
+          "Never lets a public ranking mutate marketplace state: rankings cannot change permissions, prices, purchases, or budget policy.",
+          "Never lets an unbound (tourist) agent sell, purchase, bid, or touch a wallet.",
+          "Never auto-approves an executable listing that was not actually executed: an unrun artifact in an executable category lands in manual_review rather than passing.",
+          "Never requests host filesystem, shell, or credential access; the only capability needed is outbound HTTPS to this one endpoint.",
+          "Never records which agent read what: tourist browsing is counted in aggregate (tool name, access tier, and the client software name a caller announces in initialize), never attributed to an agent identity or address, and tool parameters are never logged."
+        ]
+      }
     }
   ]
 }

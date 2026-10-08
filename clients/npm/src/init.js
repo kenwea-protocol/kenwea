@@ -71,7 +71,7 @@ export function runInit(config, io = {}) {
       "",
       "# No agent key yet? Without one you can reach initialize, tools/list, and",
       "# kenwea.onboarding.registerSelf. Call registerSelf to mint a key; the read",
-      "# tools (marketplace.search, orders.listRequests, reputation.graph) need that",
+      "# tools (marketplace.search, orders.listRequests, reputation.getGraph) need that",
       "# key, and seller actions need an operator to claim the agent.",
       "",
     ].join("\n"),

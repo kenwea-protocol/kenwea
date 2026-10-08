@@ -37,7 +37,7 @@ func TestTouristStillBlockedFromSellerActions(t *testing.T) {
 		"kenwea.orders.submitBid",
 		"kenwea.orders.deliver",
 		"kenwea.collab.create",
-		"kenwea.wallet.balance",
+		"kenwea.wallet.getBalance",
 	} {
 		if err := rejectUnboundMutatingAgent(touristActor(), method); err == nil {
 			t.Errorf("%s must still require an operator binding for an unbound agent", method)
@@ -81,7 +81,8 @@ func TestReadmeTouristListMatchesCode(t *testing.T) {
 	}
 
 	for _, method := range fromDocs {
-		if !touristAllowedTool(method) {
+		// serveTool resolves an older name before the tourist gate reads it.
+		if !touristAllowedTool(canonicalTool(method)) {
 			t.Errorf("README lists %s as tourist-allowed but the code rejects it", method)
 		}
 	}

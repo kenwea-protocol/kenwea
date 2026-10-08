@@ -12,36 +12,72 @@ import (
 )
 
 var allowedTools = map[string]struct{}{
-	"kenwea.onboarding.startOperatorAgent":   {},
-	"kenwea.onboarding.registerSelf":         {},
-	"kenwea.auth.identify":                   {},
-	"kenwea.auth.profile":                    {},
-	"kenwea.agent.identity":                  {},
-	"kenwea.agent.heartbeat":                 {},
-	"kenwea.marketplace.search":              {},
-	"kenwea.marketplace.preview":             {},
-	"kenwea.marketplace.publish":             {},
-	"kenwea.marketplace.purchase":            {},
-	"kenwea.marketplace.install":             {},
-	"kenwea.wallet.balance":                  {},
-	"kenwea.wallet.transactions":             {},
-	"kenwea.notifications.list":              {},
-	"kenwea.notifications.ack":               {},
-	"kenwea.jobs.getStatus":                  {},
-	"kenwea.sandbox.check":                   {},
-	"kenwea.orders.listRequests":             {},
-	"kenwea.orders.submitBid":                {},
-	"kenwea.orders.deliver":                  {},
-	"kenwea.collab.create":                   {},
-	"kenwea.collab.join":                     {},
-	"kenwea.procurement.memory":              {},
-	"kenwea.reputation.graph":                {},
-	"kenwea.community.ask":                   {},
-	"kenwea.observer.feed":                   {},
-	"kenwea.analytics.forecast":              {},
-	"kenwea.recommendations.relatedProducts": {},
-	"kenwea.dependencies.watch":              {},
-	"kenwea.scale.status":                    {},
+	"kenwea.onboarding.startOperatorAgent":       {},
+	"kenwea.onboarding.registerSelf":             {},
+	"kenwea.agent.getIdentity":                   {},
+	"kenwea.agent.sendHeartbeat":                 {},
+	"kenwea.marketplace.search":                  {},
+	"kenwea.marketplace.preview":                 {},
+	"kenwea.marketplace.publish":                 {},
+	"kenwea.marketplace.purchase":                {},
+	"kenwea.marketplace.install":                 {},
+	"kenwea.wallet.getBalance":                   {},
+	"kenwea.wallet.listTransactions":             {},
+	"kenwea.notifications.list":                  {},
+	"kenwea.notifications.ack":                   {},
+	"kenwea.jobs.getStatus":                      {},
+	"kenwea.sandbox.check":                       {},
+	"kenwea.orders.listRequests":                 {},
+	"kenwea.orders.submitBid":                    {},
+	"kenwea.orders.deliver":                      {},
+	"kenwea.collab.create":                       {},
+	"kenwea.collab.join":                         {},
+	"kenwea.procurement.listDecisions":           {},
+	"kenwea.reputation.getGraph":                 {},
+	"kenwea.community.ask":                       {},
+	"kenwea.observer.getFeed":                    {},
+	"kenwea.analytics.getForecast":               {},
+	"kenwea.recommendations.listRelatedProducts": {},
+	"kenwea.dependencies.watch":                  {},
+	"kenwea.scale.getStatus":                     {},
+}
+
+// unlistedAliases are older names that still answer but are no longer
+// advertised in tools/list, each mapped to the tool that replaces it. serveTool
+// resolves them before any gate runs, so everything past that point sees one
+// name per tool and an alias can never be treated differently from the tool it
+// stands for.
+//
+// Two rounds put names here. On 2026-09-29 kenwea.auth.identify,
+// kenwea.auth.profile and kenwea.agent.identity were three listed entries with
+// the same description and the same handler, and an agent choosing between
+// identical entries has nothing to go on (Glama's Tool Definition Quality Score,
+// disambiguation 2/5). The same day the remaining names were put on one pattern,
+// area then a verb first (getBalance, listTransactions), because the list mixed
+// verbs, bare nouns and camelCase phrases (naming consistency 3/5). Existing
+// callers keep working: every old name is still accepted and served exactly as
+// the new one; it is only not offered to a new caller reading the list.
+var unlistedAliases = map[string]string{
+	"kenwea.auth.identify":                   "kenwea.agent.getIdentity",
+	"kenwea.auth.profile":                    "kenwea.agent.getIdentity",
+	"kenwea.agent.identity":                  "kenwea.agent.getIdentity",
+	"kenwea.agent.heartbeat":                 "kenwea.agent.sendHeartbeat",
+	"kenwea.analytics.forecast":              "kenwea.analytics.getForecast",
+	"kenwea.observer.feed":                   "kenwea.observer.getFeed",
+	"kenwea.procurement.memory":              "kenwea.procurement.listDecisions",
+	"kenwea.recommendations.relatedProducts": "kenwea.recommendations.listRelatedProducts",
+	"kenwea.reputation.graph":                "kenwea.reputation.getGraph",
+	"kenwea.scale.status":                    "kenwea.scale.getStatus",
+	"kenwea.wallet.balance":                  "kenwea.wallet.getBalance",
+	"kenwea.wallet.transactions":             "kenwea.wallet.listTransactions",
+}
+
+// canonicalTool returns the listed name for an alias and any other name as given.
+func canonicalTool(name string) string {
+	if canonical, ok := unlistedAliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 var idempotentTools = map[string]struct{}{
@@ -74,7 +110,7 @@ var mutatingTools = map[string]struct{}{
 	"kenwea.onboarding.startOperatorAgent": {},
 	"kenwea.community.ask":                 {},
 	"kenwea.sandbox.check":                 {},
-	// kenwea.agent.heartbeat is intentionally excluded: it's a low-stakes, non-destructive
+	// kenwea.agent.sendHeartbeat is intentionally excluded: it's a low-stakes, non-destructive
 	// liveness ping, not an economic or destructive action, so a revoked-but-cached
 	// session replaying it carries no meaningful risk.
 }
@@ -88,7 +124,7 @@ type AgentPolicy struct {
 const operatorRequiredMessage = "Action forbidden: Unbound Agent. Please provide your unique Agent ID to your Operator and ask them to claim your account and configure your permissions via the Operator Control Plane."
 
 func allowedTool(method string) bool {
-	_, ok := allowedTools[method]
+	_, ok := allowedTools[canonicalTool(method)]
 	return ok
 }
 
@@ -182,18 +218,16 @@ func touristAllowedTool(method string) bool {
 		// because that is circular.
 		"kenwea.sandbox.check",
 		"kenwea.community.ask",
-		"kenwea.auth.identify",
-		"kenwea.auth.profile",
-		"kenwea.agent.identity",
-		"kenwea.agent.heartbeat",
+		"kenwea.agent.getIdentity",
+		"kenwea.agent.sendHeartbeat",
 		"kenwea.marketplace.search",
 		"kenwea.orders.listRequests",
-		"kenwea.procurement.memory",
-		"kenwea.reputation.graph",
-		"kenwea.observer.feed",
-		"kenwea.analytics.forecast",
-		"kenwea.recommendations.relatedProducts",
-		"kenwea.scale.status":
+		"kenwea.procurement.listDecisions",
+		"kenwea.reputation.getGraph",
+		"kenwea.observer.getFeed",
+		"kenwea.analytics.getForecast",
+		"kenwea.recommendations.listRelatedProducts",
+		"kenwea.scale.getStatus":
 		return true
 	default:
 		return false
@@ -267,13 +301,13 @@ func forwardsToPlatform(method string) bool {
 	case "kenwea.marketplace.search",
 		"kenwea.onboarding.registerSelf",
 		"kenwea.onboarding.startOperatorAgent",
-		"kenwea.agent.heartbeat",
+		"kenwea.agent.sendHeartbeat",
 		"kenwea.marketplace.preview",
 		"kenwea.marketplace.publish",
 		"kenwea.marketplace.purchase",
 		"kenwea.marketplace.install",
-		"kenwea.wallet.balance",
-		"kenwea.wallet.transactions",
+		"kenwea.wallet.getBalance",
+		"kenwea.wallet.listTransactions",
 		"kenwea.notifications.list",
 		"kenwea.notifications.ack",
 		"kenwea.jobs.getStatus",
@@ -283,14 +317,14 @@ func forwardsToPlatform(method string) bool {
 		"kenwea.orders.deliver",
 		"kenwea.collab.create",
 		"kenwea.collab.join",
-		"kenwea.procurement.memory",
-		"kenwea.reputation.graph",
+		"kenwea.procurement.listDecisions",
+		"kenwea.reputation.getGraph",
 		"kenwea.community.ask",
-		"kenwea.observer.feed",
-		"kenwea.analytics.forecast",
-		"kenwea.recommendations.relatedProducts",
+		"kenwea.observer.getFeed",
+		"kenwea.analytics.getForecast",
+		"kenwea.recommendations.listRelatedProducts",
 		"kenwea.dependencies.watch",
-		"kenwea.scale.status":
+		"kenwea.scale.getStatus":
 		return true
 	default:
 		return false
@@ -299,10 +333,10 @@ func forwardsToPlatform(method string) bool {
 
 func lowPriorityTool(method string) bool {
 	switch method {
-	case "kenwea.observer.feed",
-		"kenwea.analytics.forecast",
-		"kenwea.recommendations.relatedProducts",
-		"kenwea.scale.status":
+	case "kenwea.observer.getFeed",
+		"kenwea.analytics.getForecast",
+		"kenwea.recommendations.listRelatedProducts",
+		"kenwea.scale.getStatus":
 		return true
 	default:
 		return false
@@ -375,9 +409,9 @@ func requestHash(params json.RawMessage) string {
 
 func resultFor(method string, actor Actor) map[string]any {
 	switch method {
-	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity":
+	case "kenwea.agent.getIdentity":
 		return map[string]any{"actor": actor, "phase": "phase_2_marketplace"}
-	case "kenwea.agent.heartbeat":
+	case "kenwea.agent.sendHeartbeat":
 		return map[string]any{"status": "accepted", "actor": actor}
 	case "kenwea.marketplace.preview", "kenwea.marketplace.publish":
 		return asyncJobEnvelope(method)
@@ -385,12 +419,12 @@ func resultFor(method string, actor Actor) map[string]any {
 		return map[string]any{"status": "forwarded_to_platform_api", "actor": actor, "authority": "platform_api"}
 	case "kenwea.marketplace.search":
 		return map[string]any{"products": []any{}, "sandboxGate": "required", "authority": "platform_api"}
-	case "kenwea.wallet.balance":
+	case "kenwea.wallet.getBalance":
 		// Machine-readable balance terms, mirrored from the platform wallet reads:
 		// an agent must learn "spend-only, no withdrawal in v1" from the tool
 		// result itself, not from human-facing FAQ prose.
 		return map[string]any{"currency": "USDT", "displayOnly": true, "authority": "ledger", "terms": map[string]any{"unspentBalancePolicy": "spend_only", "withdrawal": "none_v1", "expiry": "none"}}
-	case "kenwea.wallet.transactions":
+	case "kenwea.wallet.listTransactions":
 		return map[string]any{"transactions": []any{}, "authority": "ledger"}
 	case "kenwea.notifications.list":
 		return map[string]any{"notifications": []any{}, "structuredOnly": true}
@@ -402,21 +436,21 @@ func resultFor(method string, actor Actor) map[string]any {
 		return map[string]any{"requests": []any{}, "authority": "platform_api"}
 	case "kenwea.orders.submitBid", "kenwea.orders.deliver", "kenwea.collab.create", "kenwea.collab.join":
 		return map[string]any{"status": "forwarded_to_platform_api", "actor": actor, "authority": "platform_api"}
-	case "kenwea.procurement.memory":
+	case "kenwea.procurement.listDecisions":
 		return map[string]any{"entries": []any{}, "privacy": "structured_records_only", "authority": "platform_api"}
-	case "kenwea.reputation.graph":
+	case "kenwea.reputation.getGraph":
 		return map[string]any{"edges": []any{}, "dimensions": reputationDimensions(), "authority": "platform_api"}
 	case "kenwea.community.ask":
 		return map[string]any{"status": "moderated_forward", "structuredOnly": true, "authority": "platform_api"}
-	case "kenwea.observer.feed":
+	case "kenwea.observer.getFeed":
 		return map[string]any{"items": []any{}, "publicSafe": true, "authority": "platform_api"}
-	case "kenwea.analytics.forecast":
+	case "kenwea.analytics.getForecast":
 		return map[string]any{"reports": []any{}, "advisoryOnly": true, "authority": "platform_api"}
-	case "kenwea.recommendations.relatedProducts":
+	case "kenwea.recommendations.listRelatedProducts":
 		return map[string]any{"edges": []any{}, "explainable": true, "authority": "platform_api"}
 	case "kenwea.dependencies.watch":
 		return map[string]any{"status": "watch_forwarded", "idempotent": true, "authority": "platform_api"}
-	case "kenwea.scale.status":
+	case "kenwea.scale.getStatus":
 		return map[string]any{"backpressure": "low_priority_shed_first", "authority": "platform_api"}
 	case "kenwea.onboarding.startOperatorAgent":
 		return map[string]any{"status": "forward_to_platform_api", "actor": actor}

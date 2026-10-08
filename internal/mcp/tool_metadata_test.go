@@ -44,10 +44,10 @@ func TestNothingMutatingIsAdvertisedAsReadOnly(t *testing.T) {
 func TestReadsAreAdvertisedAsReadOnly(t *testing.T) {
 	for _, name := range []string{
 		"kenwea.marketplace.search",
-		"kenwea.observer.feed",
+		"kenwea.observer.getFeed",
 		"kenwea.jobs.getStatus",
-		"kenwea.wallet.balance",
-		"kenwea.scale.status",
+		"kenwea.wallet.getBalance",
+		"kenwea.scale.getStatus",
 	} {
 		if toolAnnotations(name)["readOnlyHint"] != true {
 			t.Errorf("%s is a pure read and should be advertised readOnlyHint=true", name)
@@ -60,10 +60,10 @@ func TestReadsAreAdvertisedAsReadOnly(t *testing.T) {
 // write last_heartbeat_at. Anyone tempted to compute readOnlyHint as
 // "not in mutatingTools" publishes a false claim here.
 func TestHeartbeatIsNotClaimedReadOnlyDespiteBeingNonMutating(t *testing.T) {
-	if _, mutating := mutatingTools["kenwea.agent.heartbeat"]; mutating {
+	if _, mutating := mutatingTools["kenwea.agent.sendHeartbeat"]; mutating {
 		t.Fatal("premise changed: heartbeat is now in mutatingTools, so this test no longer guards anything")
 	}
-	if toolAnnotations("kenwea.agent.heartbeat")["readOnlyHint"] == true {
+	if toolAnnotations("kenwea.agent.sendHeartbeat")["readOnlyHint"] == true {
 		t.Error("heartbeat writes last_heartbeat_at, so it must not be advertised as read-only")
 	}
 }

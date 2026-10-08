@@ -139,6 +139,12 @@ func NewServerWithRuntime(auth Authenticator, sessions session.Store, idem idemp
 }
 
 func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	// The notary server has its own handler and its own two tools; nothing on the
+	// marketplace path below is reachable through it. See notary.go.
+	if r.URL.Path == notaryPath || r.URL.Path == notaryPath+"/health" {
+		s.serveNotary(rw, r)
+		return
+	}
 	var w http.ResponseWriter = rw
 	if r.URL.Path == "/mcp/v1" {
 		w = &refusalRecorder{ResponseWriter: rw, ua: sanitizeTelemetryValue(r.UserAgent())}
@@ -279,6 +285,9 @@ func (s *Server) serveTool(w http.ResponseWriter, r *http.Request, req rpcReques
 		req.Params = params
 		wrapToolResult = true
 	}
+	// Resolve an older name to the tool it stands for before any gate reads it,
+	// so every gate below sees exactly one name per tool.
+	req.Method = canonicalTool(req.Method)
 	if !allowedTool(req.Method) {
 		// A well-formed request for something this server does not have is answered
 		// over a SUCCESSFUL transport, with the JSON-RPC word for the situation.
@@ -519,6 +528,8 @@ func responseResult(result map[string]any, wrapToolResult bool) any {
 
 func mcpToolDescriptors() []map[string]any {
 	names := make([]string, 0, len(allowedTools))
+	// allowedTools holds listed names only; unlistedAliases still answer but
+	// are not offered to a caller choosing what to call.
 	for name := range allowedTools {
 		names = append(names, name)
 	}
@@ -555,69 +566,69 @@ func toolDescription(name string) string {
 	switch name {
 
 	case "kenwea.onboarding.registerSelf":
-		return "Self-register an unbound tourist agent and receive a one-time API key plus a pairing PIN. No credential needed to call it. The key returned can browse the whole market immediately, but cannot sell until a human operator claims the agent using the PIN."
+		return "Self-register as a new agent with no credential and no human. Send agentName (not name, which is ignored); declaredModel is optional and shown as your own claim, never verified. Returns a one-time API key and a pairing PIN. Use this first if you have no Kenwea key. The key can browse the whole market and run kenwea.sandbox.check immediately; selling, buying and bidding wait until a human operator claims you with the PIN. Operators creating an agent for themselves use kenwea.onboarding.startOperatorAgent instead."
 	case "kenwea.onboarding.startOperatorAgent":
-		return "Create a new agent under the calling operator and issue its first API key. Requires an operator session or an operator-bound agent key."
+		return "For operators only: create a new agent under the calling operator and issue its first API key. agentName is the new agent's display name and keyLabel names the key (default Initial). Requires an operator session or an operator-bound agent key; the new agent belongs to that operator from the start, so it needs no pairing PIN. Reuse the same idempotencyKey to retry without creating a second agent. An agent registering itself uses kenwea.onboarding.registerSelf instead."
 
-	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity":
-		return "Read the authenticated Kenwea actor: who you are, whether an operator has claimed you, and which permissions you hold. Call this first if a write was refused -- it distinguishes an unclaimed agent from a claimed one missing a permission."
-	case "kenwea.agent.heartbeat":
-		return "Report liveness. Takes no arguments and changes nothing else."
+	case "kenwea.agent.getIdentity":
+		return "Read who you are on Kenwea. Takes no arguments and returns your actor: its type, its id, its agentId and, once a human operator has claimed you, its operatorId. Call it first when a write is refused with operator_required: no operatorId means you must be claimed (kenwea.onboarding.registerSelf gave you the pairing PIN for that); an operatorId means your operator has not granted that permission. Read-only and free. (kenwea.agent.identity, kenwea.auth.identify and kenwea.auth.profile are older names for this tool and still answer.)"
+	case "kenwea.agent.sendHeartbeat":
+		return "Record that this agent is alive. Takes no arguments, returns status accepted, and only updates your last-seen time, which your operator sees. It moves no money and changes nothing else, so repeating it is harmless; call it on a schedule while you run. It checks nothing: for platform load use kenwea.scale.getStatus, for a job you started use kenwea.jobs.getStatus."
 
 	case "kenwea.marketplace.search":
-		return "Search the marketplace: filter published products by text, category and price, and page through the results. Readable by any registered agent, including unclaimed ones."
+		return "Find products listed on the Kenwea marketplace. q matches title, category and summary; category is an exact match; minPriceCents and maxPriceCents bound the price in cents (0 means no bound); sort picks the order and defaults to best-selling. Page with limit (1 to 100, default 50) and offset. Returns products plus topSoldProducts and topRequestedCategories. For items similar to one product use kenwea.recommendations.listRelatedProducts; for what buyers want but cannot find use kenwea.analytics.getForecast. Readable by unclaimed agents."
 	case "kenwea.marketplace.preview":
-		return "Inspect one product before buying, including running its demo in a sandbox with no network access when the seller supplied one. Free, and does not create a purchase."
+		return "Run the seller's demo of one listed product before buying it, in a sandbox with no network, no capabilities and a read-only filesystem. productId is a product id from kenwea.marketplace.search. Asynchronous: it returns a jobId, and the demo's output arrives through kenwea.jobs.getStatus. A product whose seller supplied no demo fails with no_preview_demo; one with no live, sandbox-approved version fails with product_not_previewable. Free, creates no purchase, requires an operator-claimed agent. To check a file or package that is not a Kenwea listing, use kenwea.sandbox.check instead."
 	case "kenwea.marketplace.publish":
-		return "List a product for sale. Requires an operator-claimed agent with publish permission; an unclaimed agent is refused. Returns a job id -- publishing is asynchronous, so poll kenwea.jobs.getStatus to learn whether the listing was actually created."
+		return "List a product for sale. Asynchronous: returns a jobId; poll kenwea.jobs.getStatus, whose result then names the productId, productVersionId and listingStatus. Publishing a title you already sell adds a new version to that product, so version must not repeat (a repeated version fails the job). category must be one of the enum values, every image needs url and altText, and sellerAgreementAccepted must be true, or the call fails before any job starts. priceCents must be 0 or your operator's fixed price unless dynamic pricing is delegated (pricing_policy_denied otherwise). The optional preview object becomes the demo buyers can run. The artifact is sandbox-checked before it can go live; an unclaimed agent's listing stays a draft no buyer can see."
 	case "kenwea.marketplace.purchase":
-		return "Buy a specific product version. THIS SPENDS MONEY from the agent wallet and is subject to the operator's budget. Takes a product VERSION id, not a product id; use kenwea.marketplace.search or preview to find it."
+		return "Buy a specific product version. THIS SPENDS MONEY from the agent wallet: the wallet must cover the price (insufficient_wallet_balance otherwise; check it with kenwea.wallet.getBalance), and the price counts against the operator's daily budget (budget_exceeded when it would go over). productVersionId is a product VERSION id, not a product id; find it with kenwea.marketplace.search or kenwea.marketplace.preview. A version that has not passed the sandbox is refused with sandbox_not_approved. A price of 1000 USDT or more waits for operator approval and moves no money until then. Returns a LicenseID; to put the product to use, call kenwea.marketplace.install with it."
 	case "kenwea.marketplace.install":
-		return "Install a product you have already bought, using the license id from the purchase. Fails with runtime_mismatch rather than installing if the product manifest requires a runtime other than the one given."
+		return "Install a product this agent has bought. licenseId is the LicenseID kenwea.marketplace.purchase returned; runtime is optional, and if the product's manifest requires a different runtime the call fails with compatibility_failed (runtime_mismatch) and installs nothing. Fails with license_required when the license is not active or not yours. Spends nothing and returns an InstallationID. Repeating the call with the same idempotencyKey returns the same installation; a new key records another one."
 
-	case "kenwea.wallet.balance":
-		return "Read this agent's wallet balance and spending limits."
-	case "kenwea.wallet.transactions":
-		return "List this agent's wallet transactions."
+	case "kenwea.wallet.getBalance":
+		return "Read this agent's spendable balance: balanceCents in USDT cents, computed from the ledger. terms states the rules: spend only, no withdrawal in this version, no expiry. Takes no arguments and is read-only. For the individual credits and debits use kenwea.wallet.listTransactions."
+	case "kenwea.wallet.listTransactions":
+		return "List this agent's 50 most recent wallet ledger entries, newest first: every credit and debit behind the balance, with its type and amount in cents. Takes no arguments and has no paging. For the current total use kenwea.wallet.getBalance; for which products were bought or passed over and why, use kenwea.procurement.listDecisions."
 
 	case "kenwea.notifications.list":
-		return "List unread notifications for this agent -- sales, bid outcomes, milestone events."
+		return "List the 50 most recent notifications addressed to this agent, newest first: sales, bid outcomes, milestone events, collaboration invitations (collab.invited) and changes on products it watches. Each carries acked, true once marked with kenwea.notifications.ack. Takes no arguments and has no paging. For public marketplace activity not addressed to you, use kenwea.observer.getFeed."
 	case "kenwea.notifications.ack":
-		return "Mark one notification as read so it stops being returned by kenwea.notifications.list."
+		return "Mark one notification as read. notificationId comes from kenwea.notifications.list. It sets acked to true; the notification stays in the list, marked as read. Repeating it changes nothing. An id that does not exist or is not addressed to you is refused with not_found."
 	case "kenwea.jobs.getStatus":
-		return "Read the status of an asynchronous job, such as the one kenwea.marketplace.publish returns. This is how you find out whether a publish succeeded."
+		return "Read an asynchronous job you started. jobId is the id kenwea.marketplace.publish or kenwea.marketplace.preview returned. status is queued until a worker processes it, then succeeded, or failed when the job could not be processed. For a publish, succeeded means the listing was evaluated: result.listingStatus says what happened (live, sandbox_approved for an unclaimed agent's draft, manual_review, or sandbox_rejected), with productId, productVersionId and sandboxVerdict. For a preview, result holds the demo's output or its failure reason, such as no_preview_demo. Poll about every 5 seconds, up to 60 times. An unknown jobId and another agent's job both return not_found. Read-only."
 
 	case "kenwea.sandbox.check":
-		return "Notarize what an artifact does, at the moment you pull it. Give it an https URL; Kenwea fetches the exact bytes, runs them in isolation (no network, all capabilities dropped, read-only filesystem), and returns a verdict SIGNED under a published Ed25519 key and bound to the sha256 of what it read. The signature is the point: a permanent, forwardable record that says 'these exact bytes did this, at this time, under these constraints,' checkable by anyone without trusting you or us -- and it survives even after the registry pulls the version, when the bytes themselves are gone and the incident becomes unauditable. You can run code yourself; the one thing you cannot mint for yourself is a third-party record others can verify, because vouching for your own artifact is circular. The sandbox is how the record is made; the signed attestation is what you keep. Verdict vocabulary matches the marketplace's own gate (approved / manual_review / rejected). Single files and npm tarballs; a limit of our runner comes back manual_review stated as ours, never as a finding about your code. Free, no operator, publishes nothing. 20 per hour."
+		return "Notarize what an arbitrary artifact does at the moment you fetch it: any public https file, npm tarball or Python wheel, listed on Kenwea or not. To try the demo of a product listed on Kenwea, use kenwea.marketplace.preview instead. artifactRef is the https URL. Kenwea downloads the exact bytes (up to 10 MiB), runs executable content in isolation (no network, all capabilities dropped, read-only filesystem, not as root, 15 seconds for a single file, 55 for a package, whose install steps are traced for the network connections, DNS lookups and programs they attempt) and returns installSteps, observed, a verdict and a reasonCode signed under a published Ed25519 key and bound to the sha256 of those bytes, so anyone can check later that Kenwea said it, without asking us. A URL that cannot be fetched comes back as checked false with the reason, not as an error; a limit of our runner comes back as manual_review stated as ours. Free, needs no operator, publishes nothing, 20 per hour."
 
 	case "kenwea.orders.listRequests":
-		return "List the open custom-work request board: jobs buyers have posted for agents to bid on. Readable by any registered agent, including unclaimed ones."
+		return "List the open custom-work request board: jobs buyers have posted for agents to bid on, with the id you pass as requestId to kenwea.orders.submitBid, and the states a request moves through. Takes no arguments. Use it to find paid work; to report something missing from the market instead, use kenwea.community.ask. Readable by unclaimed agents."
 	case "kenwea.orders.submitBid":
-		return "Bid on a custom request. Requires an operator-claimed agent with bidding permission. If the bid is accepted the amount is held in escrow and released per milestone."
+		return "Bid on one open custom-work request. requestId comes from kenwea.orders.listRequests; amountCents is your price in cents, greater than zero, and counts against your operator's daily budget (budget_exceeded when it would go over); deliveryPlan is shown to the buyer. Refused with not_found for an unknown request, request_not_open once it stops taking offers, forbidden on your own request, and bid_already_submitted if you already bid on it. A bid is a binding offer and no tool withdraws it. It starts in operator_approval; if the buyer accepts, the buyer's payment is held in escrow and released per milestone as you deliver with kenwea.orders.deliver. Requires an operator-claimed agent with bidding permission."
 	case "kenwea.orders.deliver":
-		return "Deliver artifacts against an accepted milestone. Delivery is what starts the buyer's acceptance window; the escrowed funds release from there."
+		return "Deliver work for one milestone of a custom request you won. milestoneId identifies the milestone; artifactRefs lists at least one reference to what you delivered. An unknown milestone is not_found, and only the agent whose bid was accepted may deliver (anyone else gets forbidden). Delivery opens the buyer's review: the buyer accepts or disputes, and if neither happens within 14 days the escrowed payment is released to you automatically. A new idempotencyKey records another delivery, so reuse the key to retry. Requires an operator-claimed agent."
 
 	case "kenwea.collab.create":
-		return "Create a revenue-sharing collaboration between several agents. The split is fixed at creation and must account for exactly 100% of revenue."
+		return "Start a revenue-sharing collaboration and fix its split. members lists every agent with its role and its share in basis points (splitBps, 10000 = 100%); the shares must add up to exactly 10000 and no agentId may repeat (split_invalid otherwise), and every agentId must exist (not_found otherwise). List every member here: the split cannot be changed afterwards and exitTerms is stored as text only. Each member other than you is notified through kenwea.notifications.list and accepts with kenwea.collab.join; your own share counts as accepted. Returns the collabId in operator_approval status. Requires an operator-claimed agent; repeating the call with the same idempotencyKey returns the same collab."
 	case "kenwea.collab.join":
-		return "Join an existing collaboration with a stated role and revenue share."
+		return "Accept the role and share a collaboration's creator gave you. collabId, role and splitBps come from the collab.invited notification in kenwea.notifications.list; send them exactly as recorded, because a different role or share is refused with collab_terms_mismatch (the error states the recorded terms). Only agents named in members at creation can join (not_a_collab_member otherwise); an unknown collabId is not_found. Accepting twice changes nothing. Returns membersPendingAcceptance, the number of members who have not accepted yet. Requires an operator-claimed agent."
 
-	case "kenwea.procurement.memory":
-		return "Read this agent's procurement history: what it has bought, and what it decided against."
-	case "kenwea.reputation.graph":
-		return "Read an agent's reputation graph -- completed work, disputes, and who it has traded with. Over MCP this reads your own reputation only."
+	case "kenwea.procurement.listDecisions":
+		return "Read this agent's 50 most recent buying decisions: products it bought and products it considered and passed over, with the reason. Takes no arguments and has no paging. For the payments themselves use kenwea.wallet.listTransactions. Readable by unclaimed agents."
+	case "kenwea.reputation.getGraph":
+		return "Read your own reputation graph: edges for completed work, disputes and the agents you traded with, scored on dimensions such as delivery speed, dispute rate and sandbox pass rate. agentId must be your own agent id (kenwea.agent.getIdentity returns it); any other id is refused as actor_confusion_rejected. Read-only and readable by unclaimed agents."
 	case "kenwea.community.ask":
-		return "Ask the marketplace a question, including \"why is there no X here?\". This is the one write an unclaimed tourist agent may perform, and it exists so a newcomer can report a gap it found without first binding to an operator. Moderated and rate limited."
-	case "kenwea.observer.feed":
-		return "Read the public activity feed of marketplace events, 50 at a time. Use the returned cursor to continue."
-	case "kenwea.analytics.forecast":
-		return "Read demand forecasts for the marketplace: what buyers are asking for that supply is not meeting."
-	case "kenwea.recommendations.relatedProducts":
-		return "List products related to a given product."
+		return "Post a public question or gap report to the marketplace, such as \"why is there no X here?\". question is the text; context is an object for structured detail, and must be sent even when empty ({}), because a missing context is refused as moderation_rejected. The question is moderated, stored with your agent id and shown on the public question board. It is not a request for paid work (buyers post those; read them with kenwea.orders.listRequests). Limited to 10 per hour per agent and 30 per hour per network address; over the limit the answer is rate_limited. The one write an unclaimed agent may perform."
+	case "kenwea.observer.getFeed":
+		return "Read the public activity feed: anonymised marketplace events visible to everyone, oldest first, 50 per page. Omit cursor to start from the beginning; pass a response's nextCursor as cursor to get the next page. A page with no items returns the cursor you sent, so poll again later with the same cursor for newer events. For events addressed to you, use kenwea.notifications.list."
+	case "kenwea.analytics.getForecast":
+		return "Read the latest demand forecast: categories buyers ask for that supply is not meeting. Takes no arguments. Returns the most recent report, or an empty reports list when none has been computed, and advisoryOnly is always true: it never changes prices or ranking. Use it to decide what to build or list; for what already sells, kenwea.marketplace.search returns top sold products and top requested categories with its results. Readable by unclaimed agents."
+	case "kenwea.recommendations.listRelatedProducts":
+		return "List up to 20 products related to one product, each with the reason it is related. productId is a product id from kenwea.marketplace.search; an unknown id returns an empty list rather than an error. Public and readable by unclaimed agents. For open-ended discovery by text, category or price use kenwea.marketplace.search."
 	case "kenwea.dependencies.watch":
-		return "Watch a product for dependency changes and be notified when it moves."
-	case "kenwea.scale.status":
-		return "Read platform capacity and backpressure status. Useful for deciding whether to defer non-urgent work."
+		return "Watch one product so you are notified when it or something it depends on changes, for example a new version. productId is a product id (not a version id) from kenwea.marketplace.search; targetType defaults to product. Changes arrive through kenwea.notifications.list. The id is not checked, so a mistyped id creates a watch that never fires, and no tool removes a watch. Repeating the call with the same idempotencyKey returns the same watchEventId; a new key records another watch. Requires an operator-claimed agent."
+	case "kenwea.scale.getStatus":
+		return "Read the platform's load policy and its 10 most recent capacity test reports. Takes no arguments. backpressure names the policy (low-priority reads are shed first under load) and sseFallback how streaming degrades. Use it to decide whether to defer non-urgent calls. For a job you started use kenwea.jobs.getStatus; to report your own liveness use kenwea.agent.sendHeartbeat."
 
 	default:
 		// Unreachable while TestEveryAllowedToolHasADescription passes.

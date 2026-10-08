@@ -18,7 +18,7 @@ import { resolveConfig, validateConfig } from "./config.js";
 import { runProxy } from "./proxy.js";
 import { runDoctor } from "./doctor.js";
 import { runInit } from "./init.js";
-import { runCheck } from "./check.js";
+import { runCheck, normaliseGates, GATES, EXIT } from "./check.js";
 
 // Read from package.json rather than restated here.
 //
@@ -36,36 +36,55 @@ const USAGE = `kenwea-mcp — third-party sandbox verdicts, and an MCP bridge to
 Usage:
   kenwea-mcp check <pkg|url>  Notarize what an artifact does. Give an npm package
                               (express, express@4.18.2, @scope/pkg@1.2.3) or an https
-                              URL. Kenwea fetches it, runs it in a sandbox with no
-                              network, no capabilities and a read-only filesystem, and
-                              prints a signed verdict. Mints a free key on first use --
-                              no signup, no payment.
+                              URL. Kenwea fetches it and runs it in a sandbox with no
+                              network, no capabilities, a read-only filesystem and no
+                              root; for a package it runs the install steps npm would
+                              run and traces what they attempt. No key, no signup.
+                              The signed record is verified here before it is shown.
   kenwea-mcp doctor           Check connectivity and authentication.
   kenwea-mcp init             Print ready-to-paste client configuration.
   kenwea-mcp [proxy]          Run the stdio<->HTTP bridge (default). MCP clients spawn this.
 
-Options:
-  --fail-on <verdict>    Exit non-zero when the verdict is at or past this level, so a
-                         CI job can gate on it. One of: manual_review, rejected.
-                         Default: report only, always exit 0 when the check ran.
+Options for check:
+  --fail-on <gates>      Fail the run when the signed record trips a gate, so a CI
+                         job can block on it. Comma separated, any of:
+                           install-scripts  the package runs anything at install
+                           network          an install step tried to reach the network
+                           manual_review    the verdict is manual_review or rejected
+                           rejected         the verdict is rejected
+                         A gate that gets no answer, or one that does not verify,
+                         fails closed. Default: report only.
   --json                 Print the raw result as JSON on stdout (progress goes to
                          stderr), for scripts and CI. Works with --fail-on.
+  --no-verify            Skip verifying the record here. Only for a server you run
+                         yourself without Kenwea's key.
+
+Options:
   --url <endpoint>       Override the remote endpoint (env: KENWEA_MCP_URL)
   --key <agentKey>       Bearer agent key (env: KENWEA_API_KEY)
   --protocol <version>   MCP-Protocol-Version (env: KENWEA_MCP_PROTOCOL_VERSION)
   -h, --help             Show this help
   -v, --version          Show version
 
+Exit codes for check:
+  0  checked and verified, and no gate tripped (or none was set)
+  1  a --fail-on gate tripped
+  2  the command line was wrong
+  3  no answer: not resolvable, not fetchable, refused or unreachable
+  4  the answer did not verify: bad or revoked signature, or not about these bytes
+
 Examples:
   kenwea-mcp check express@4.18.2
-  kenwea-mcp check @kenwea/mcp --fail-on rejected
+  kenwea-mcp check @kenwea/mcp --fail-on install-scripts,network
 
 Default endpoint: https://mcp.kenwea.com/mcp/v1
 `;
 
+const COMMANDS = ["proxy", "init", "doctor", "check"];
+
 /**
  * @param {string[]} argv the args after `node cli.js`
- * @returns {{command: string, overrides: Partial<import("./config.js").BridgeConfig>, help: boolean, version: boolean, artifactRef: string|null, failOn: string|null, json: boolean}}
+ * @returns {{command: string, overrides: Partial<import("./config.js").BridgeConfig>, help: boolean, version: boolean, artifactRef: string|null, failOn: string|null, json: boolean, verify: boolean, errors: string[]}}
  */
 export function parseArgs(argv) {
   /** @type {Partial<import("./config.js").BridgeConfig>} */
@@ -76,8 +95,22 @@ export function parseArgs(argv) {
   /** @type {string|null} */
   let failOn = null;
   let json = false;
+  let verify = true;
   let help = false;
   let version = false;
+  let commandSeen = false;
+  /** @type {string[]} */
+  const errors = [];
+  // A flag that takes a value must get one. Until 0.3.0 `--fail-on` at the end of
+  // a command line read undefined and the gate silently did not exist.
+  const value = (/** @type {number} */ i, /** @type {string} */ flag) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith("-")) {
+      errors.push(`${flag} needs a value`);
+      return null;
+    }
+    return v;
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -91,38 +124,45 @@ export function parseArgs(argv) {
         version = true;
         break;
       case "--url":
-        overrides.url = argv[++i];
+        overrides.url = value(++i, arg) ?? undefined;
         break;
       case "--key":
-        overrides.apiKey = argv[++i];
+        overrides.apiKey = value(++i, arg) ?? undefined;
         break;
       case "--fail-on":
-        failOn = argv[++i];
+        failOn = value(++i, arg);
         break;
       case "--json":
         json = true;
         break;
-      case "--protocol":
-        overrides.protocolVersion = argv[++i];
+      case "--no-verify":
+        verify = false;
         break;
-      case "proxy":
-      case "init":
-      case "doctor":
-      case "check":
-        command = arg;
+      case "--protocol":
+        overrides.protocolVersion = value(++i, arg) ?? undefined;
         break;
       default:
-        // The first bare word picks the command; any later one is the check
+        if (!arg) break;
+        // An option this version does not know is an error, not a no-op: a gate
+        // that was misspelt must not pass a build.
+        if (arg.startsWith("-")) {
+          errors.push(`unknown option "${arg}"`);
+          break;
+        }
+        // The first bare word picks the command; the next one is the check
         // target. Without this second clause `check https://x/y.js` parsed the
         // URL AS the command and silently ran the proxy instead -- a wrong
         // command that looks like a hang.
-        if (!arg || arg.startsWith("-")) break;
-        if (command === "proxy") command = arg;
-        else if (artifactRef === null) artifactRef = arg;
+        if (!commandSeen) {
+          if (!COMMANDS.includes(arg)) errors.push(`unknown command "${arg}"`);
+          else command = arg;
+          commandSeen = true;
+        } else if (command === "check" && artifactRef === null) artifactRef = arg;
+        else errors.push(`unexpected argument "${arg}"`);
         break;
     }
   }
-  return { command, overrides, help, version, artifactRef, failOn, json };
+  return { command, overrides, help, version, artifactRef, failOn, json, verify, errors };
 }
 
 /**
@@ -131,8 +171,13 @@ export function parseArgs(argv) {
  * @returns {Promise<number>} process exit code
  */
 export async function main(argv, env) {
-  const { command, overrides, help, version, artifactRef, failOn, json } = parseArgs(argv);
+  const { command, overrides, help, version, artifactRef, failOn, json, verify, errors } = parseArgs(argv);
 
+  if (errors.length && !help && !version) {
+    for (const e of errors) process.stderr.write(`[kenwea-mcp] ${e}\n`);
+    process.stderr.write("[kenwea-mcp] run kenwea-mcp --help for usage\n");
+    return EXIT.USAGE;
+  }
   if (help) {
     process.stdout.write(USAGE);
     return 0;
@@ -158,12 +203,14 @@ export async function main(argv, env) {
       return ok ? 0 : 1;
     }
     case "check": {
-      if (failOn !== null && failOn !== "manual_review" && failOn !== "rejected") {
-        process.stderr.write(`[kenwea-mcp] --fail-on must be one of: manual_review, rejected (got "${failOn}")\n`);
-        return 2;
+      const gates = normaliseGates(failOn ?? undefined);
+      const unknown = gates.filter((g) => !GATES.includes(g));
+      if (failOn !== null && (unknown.length || !gates.length)) {
+        process.stderr.write(`[kenwea-mcp] --fail-on takes one or more of: ${GATES.join(", ")} (got "${failOn}")\n`);
+        return EXIT.USAGE;
       }
-      const { ok } = await runCheck(config, artifactRef ?? "", {}, { failOn: failOn ?? undefined, json });
-      return ok ? 0 : 1;
+      const { code } = await runCheck(config, artifactRef ?? "", {}, { failOn: gates, json, verify });
+      return code;
     }
     case "proxy":
     default:

@@ -163,7 +163,7 @@ func TestMCPAgentHeartbeatForwardsToPlatformWithoutIdempotency(t *testing.T) {
 	forwarder := &recordingForwarder{result: map[string]any{"status": "accepted"}}
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
 	server.forwarder = forwarder
-	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.agent.heartbeat","params":{}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.agent.sendHeartbeat","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	req.Header.Set("Authorization", "Bearer kw_agent_test")
 	rec := httptest.NewRecorder()
@@ -173,7 +173,7 @@ func TestMCPAgentHeartbeatForwardsToPlatformWithoutIdempotency(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "accepted") {
 		t.Fatalf("expected forwarded heartbeat acceptance, status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if forwarder.method != "kenwea.agent.heartbeat" {
+	if forwarder.method != "kenwea.agent.sendHeartbeat" {
 		t.Fatalf("expected forward call, got method=%q", forwarder.method)
 	}
 }

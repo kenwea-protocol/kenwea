@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +62,7 @@ func (a Authenticator) Authenticate(r *http.Request) (mcp.AuthResult, error) {
 	}
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
 	req.Header.Set("X-Correlation-ID", r.Header.Get("X-Correlation-ID"))
+	setForwardedClient(req, r)
 	resp, err := a.client().Do(req)
 	if err != nil {
 		return mcp.AuthResult{}, err
@@ -114,12 +117,16 @@ func (a Authenticator) ForwardTool(r *http.Request, method string, params json.R
 	if err != nil {
 		return nil, &mcp.PlatformError{StatusCode: http.StatusBadRequest, Code: "validation_failed", Detail: err.Error()}
 	}
+	if method == "kenwea.notary.check" && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+		path = "/public/sandbox/check"
+	}
 	req, err := http.NewRequestWithContext(r.Context(), httpMethod, a.BaseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
 	req.Header.Set("X-Correlation-ID", r.Header.Get("X-Correlation-ID"))
+	setForwardedClient(req, r)
 	// Must mirror mcp.idempotencyKey exactly: the gate in front of this accepts the
 	// key from either the header or the params, so reading only the header here would
 	// let a call past the gate and then have the platform refuse it for a missing key.
@@ -170,7 +177,7 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 		return http.MethodPost, "/agent/self-registration", bytes.NewReader(params), nil
 	case "kenwea.onboarding.startOperatorAgent":
 		return http.MethodPost, "/operator/agents", bytes.NewReader(params), nil
-	case "kenwea.agent.heartbeat":
+	case "kenwea.agent.sendHeartbeat":
 		return http.MethodPost, "/agent/heartbeat", nil, nil
 	case "kenwea.marketplace.search":
 		// The params were previously dropped on the floor: this returned "/products"
@@ -188,9 +195,9 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 		return http.MethodPost, "/agent/purchases", bytes.NewReader(params), nil
 	case "kenwea.marketplace.install":
 		return http.MethodPost, "/agent/installations", bytes.NewReader(params), nil
-	case "kenwea.wallet.balance":
+	case "kenwea.wallet.getBalance":
 		return http.MethodGet, "/agent/wallet", nil, nil
-	case "kenwea.wallet.transactions":
+	case "kenwea.wallet.listTransactions":
 		return http.MethodGet, "/agent/wallet/transactions", nil, nil
 	case "kenwea.notifications.list":
 		return http.MethodGet, "/agent/notifications", nil, nil
@@ -206,7 +213,9 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 			return "", "", nil, errors.New("jobId is required")
 		}
 		return http.MethodGet, "/agent/jobs/" + url.PathEscape(id), nil, nil
-	case "kenwea.sandbox.check":
+	case "kenwea.sandbox.check", "kenwea.notary.check":
+		// kenwea.notary.check without a key goes to /public/sandbox/check instead;
+		// ForwardTool decides, because only it can see the Authorization header.
 		return http.MethodPost, "/agent/sandbox/check", bytes.NewReader(params), nil
 	case "kenwea.orders.listRequests":
 		return http.MethodGet, "/orders", nil, nil
@@ -230,9 +239,9 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 			return "", "", nil, errors.New("collabId is required")
 		}
 		return http.MethodPost, "/agent/collabs/" + url.PathEscape(id) + "/join", bytes.NewReader(params), nil
-	case "kenwea.procurement.memory":
+	case "kenwea.procurement.listDecisions":
 		return http.MethodGet, "/agent/procurement", nil, nil
-	case "kenwea.reputation.graph":
+	case "kenwea.reputation.getGraph":
 		id := paramValue(params, "agentId")
 		if id == "" {
 			return "", "", nil, errors.New("agentId is required")
@@ -240,15 +249,15 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 		return http.MethodGet, "/agents/" + url.PathEscape(id) + "/reputation", nil, nil
 	case "kenwea.community.ask":
 		return http.MethodPost, "/assistant/questions", bytes.NewReader(params), nil
-	case "kenwea.observer.feed":
+	case "kenwea.observer.getFeed":
 		cursor := paramValue(params, "cursor")
 		if cursor != "" {
 			return http.MethodGet, "/observer/feed?cursor=" + url.QueryEscape(cursor), nil, nil
 		}
 		return http.MethodGet, "/observer/feed", nil, nil
-	case "kenwea.analytics.forecast":
+	case "kenwea.analytics.getForecast":
 		return http.MethodGet, "/analytics/forecast", nil, nil
-	case "kenwea.recommendations.relatedProducts":
+	case "kenwea.recommendations.listRelatedProducts":
 		id := paramValue(params, "productId")
 		if id == "" {
 			return "", "", nil, errors.New("productId is required")
@@ -260,7 +269,7 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 			return "", "", nil, errors.New("productId is required")
 		}
 		return http.MethodPost, "/products/" + url.PathEscape(id) + "/dependencies/watch", bytes.NewReader(params), nil
-	case "kenwea.scale.status":
+	case "kenwea.scale.getStatus":
 		return http.MethodGet, "/scale/status", nil, nil
 	default:
 		return "", "", nil, errors.New("tool is not forwardable")
@@ -324,4 +333,30 @@ func paramValue(params json.RawMessage, key string) string {
 	var body map[string]string
 	_ = json.Unmarshal(params, &body)
 	return body[key]
+}
+
+// setForwardedClient tells the platform which network address the caller came
+// from, so its per-address rate limits count callers rather than this server.
+//
+// Until 2026-09-29 the platform saw every MCP call as coming from this
+// container: production had 29 actor buckets for sandbox checks and 3 address
+// buckets. nginx sets X-Real-IP to the connecting address and overwrites any
+// value a client sends, and this server listens only on localhost, so the header
+// is the caller's address. The platform believes it only alongside the internal
+// forwarding token, which a caller reaching the API directly does not have.
+func setForwardedClient(req *http.Request, incoming *http.Request) {
+	token := strings.TrimSpace(os.Getenv("KENWEA_INTERNAL_FORWARD_TOKEN"))
+	if token == "" {
+		return
+	}
+	ip := strings.TrimSpace(incoming.Header.Get("X-Real-IP"))
+	if net.ParseIP(ip) == nil {
+		host, _, err := net.SplitHostPort(incoming.RemoteAddr)
+		if err != nil {
+			return
+		}
+		ip = host
+	}
+	req.Header.Set("X-Kenwea-Client-IP", ip)
+	req.Header.Set("X-Kenwea-Forward-Token", token)
 }

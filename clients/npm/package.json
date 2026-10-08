@@ -1,6 +1,6 @@
 {
   "name": "@kenwea/mcp",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "mcpName": "com.kenwea.www/marketplace",
   "description": "Get a third-party sandbox verdict on any artifact in one command, with no account: npx @kenwea/mcp check <url>. Also the stdio<->HTTP MCP bridge to mcp.kenwea.com.",
   "type": "module",

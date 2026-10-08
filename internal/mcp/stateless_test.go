@@ -173,8 +173,8 @@ func TestStatelessToolCall(t *testing.T) {
 		rec, decoded := statelessCall{
 			method:  "tools/call",
 			id:      "4",
-			params:  `"name":"kenwea.agent.heartbeat","arguments":{}`,
-			headers: map[string]string{"Mcp-Name": "kenwea.agent.heartbeat", "Authorization": "Bearer kw_test"},
+			params:  `"name":"kenwea.agent.sendHeartbeat","arguments":{}`,
+			headers: map[string]string{"Mcp-Name": "kenwea.agent.sendHeartbeat", "Authorization": "Bearer kw_test"},
 		}.do(t, NewServer(auth))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("heartbeat returned %d: %s", rec.Code, rec.Body.String())
@@ -186,7 +186,7 @@ func TestStatelessToolCall(t *testing.T) {
 
 		// The metamorphic twin: identical call, legacy header, no _meta. It must
 		// still get its session, or the legacy era has been changed by this one.
-		req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"kenwea.agent.heartbeat","arguments":{}}}`))
+		req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"kenwea.agent.sendHeartbeat","arguments":{}}}`))
 		req.Header.Set("MCP-Protocol-Version", ProtocolCurrent)
 		req.Header.Set("Authorization", "Bearer kw_test")
 		legacy := httptest.NewRecorder()
@@ -208,8 +208,8 @@ func TestStatelessToolCall(t *testing.T) {
 		rec, decoded := statelessCall{
 			method:  "tools/call",
 			id:      "6",
-			params:  `"name":"kenwea.agent.heartbeat","arguments":{}`,
-			headers: map[string]string{"Mcp-Name": "kenwea.agent.heartbeat", "Mcp-Session-Id": "sess_from_another_era"},
+			params:  `"name":"kenwea.agent.sendHeartbeat","arguments":{}`,
+			headers: map[string]string{"Mcp-Name": "kenwea.agent.sendHeartbeat", "Mcp-Session-Id": "sess_from_another_era"},
 		}.do(t, NewServer(auth))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("a stale session id must be ignored, got %d: %s", rec.Code, rec.Body.String())

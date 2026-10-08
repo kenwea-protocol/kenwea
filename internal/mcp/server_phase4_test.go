@@ -9,7 +9,7 @@ import (
 
 func TestMCPPhase4ReadToolsStayAdapterOnly(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
-	for _, tool := range []string{"kenwea.observer.feed", "kenwea.analytics.forecast", "kenwea.recommendations.relatedProducts", "kenwea.scale.status"} {
+	for _, tool := range []string{"kenwea.observer.getFeed", "kenwea.analytics.getForecast", "kenwea.recommendations.listRelatedProducts", "kenwea.scale.getStatus"} {
 		body := `{"jsonrpc":"2.0","id":1,"method":"` + tool + `","params":{"productId":"product_01"}}`
 		req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(body))
 		req.Header.Set("MCP-Protocol-Version", ProtocolCurrent)
@@ -36,7 +36,7 @@ func TestMCPPhase4DependencyWatchRequiresIdempotency(t *testing.T) {
 
 func TestMCPPhase4BackpressureShedsLowPriorityTool(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01"}})
-	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.observer.feed","params":{}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.observer.getFeed","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", ProtocolCurrent)
 	req.Header.Set("Authorization", "Bearer key")
 	req.Header.Set("X-Kenwea-Backpressure-Level", "critical")

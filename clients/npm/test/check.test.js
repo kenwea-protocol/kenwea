@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 
 import { parseArgs } from "../src/cli.js";
-import { runCheck } from "../src/check.js";
+import { EXIT, KEYS_URL, gateRefusals, runCheck, sanitize } from "../src/check.js";
 
 const CONFIG = {
   url: "https://mcp.example/mcp/v1",
@@ -10,6 +11,96 @@ const CONFIG = {
   protocolVersion: "2025-11-25",
   correlationId: "",
 };
+const KEYED = { ...CONFIG, apiKey: "kw_existing" };
+const URL_REF = "https://example.com/tool.js";
+
+// --- a signing harness: real Ed25519 keys, a published list, signed records ---
+
+/** @param {string} status @param {string} [reason] */
+function makeKey(status, reason) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyBase64 = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64");
+  const keyId = createHash("sha256").update(publicKeyBase64).digest("hex").slice(0, 16);
+  return { privateKey, entry: { keyId, algorithm: "ed25519", publicKeyBase64, status, ...(reason ? { reason } : {}) } };
+}
+const ACTIVE = makeKey("active");
+const REVOKED = makeKey("revoked", "the seed was kept where it could have been copied");
+const KEY_LIST = { keys: [ACTIVE.entry, REVOKED.entry] };
+
+/**
+ * A result the way the notary returns it: unsigned fields beside a signed payload.
+ * @param {Record<string, any>} facts the signed facts (artifactRef defaults to URL_REF)
+ * @param {{key?: any, format1?: boolean, unsigned?: Record<string, any>}} [o]
+ */
+function record(facts, o = {}) {
+  const key = o.key ?? ACTIVE;
+  const signedFacts = {
+    issuer: "kenwea.com",
+    ...(o.format1 ? {} : { format: 2, keyId: key.entry.keyId }),
+    artifactRef: URL_REF,
+    contentSha256: "ab".repeat(32),
+    verdict: "approved",
+    reasonCode: "ran_ok",
+    ...facts,
+  };
+  const payload = JSON.stringify(signedFacts);
+  return {
+    checked: true,
+    ran: true,
+    exitCode: 0,
+    ...signedFacts,
+    ...(o.unsigned ?? {}),
+    signedAttestation: {
+      algorithm: "ed25519",
+      keyId: key.entry.keyId,
+      payload,
+      signature: sign(null, Buffer.from(payload), key.privateKey).toString("base64"),
+    },
+  };
+}
+
+const toolResult = (/** @type {any} */ payload) => ({
+  jsonrpc: "2.0",
+  id: 1,
+  result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
+});
+const INIT = { jsonrpc: "2.0", id: 1, result: {} };
+
+/**
+ * One fetch double for everything the command reaches: MCP POSTs answered from a
+ * queue, the key list, the registry manifest and the tarball by URL.
+ * @param {any[]} mcp ordered MCP responses
+ * @param {{keys?: any, manifest?: any, tarball?: Buffer}} [web]
+ */
+function network(mcp, web = {}) {
+  /** @type {any[]} */
+  const posts = [];
+  /** @type {string[]} */
+  const postUrls = [];
+  /** @type {string[]} */
+  const gets = [];
+  const queue = [...mcp];
+  const impl = async (/** @type {any} */ url, /** @type {any} */ init) => {
+    const u = String(url);
+    if (init && init.body) {
+      posts.push(JSON.parse(init.body));
+      postUrls.push(u);
+      const body = queue.shift() ?? INIT;
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body) };
+    }
+    gets.push(u);
+    if (u === KEYS_URL) return { ok: true, status: 200, text: async () => JSON.stringify(web.keys ?? KEY_LIST) };
+    if (u.startsWith("https://registry.npmjs.org/") && !u.endsWith(".tgz")) {
+      return { ok: !!web.manifest, status: web.manifest ? 200 : 404, text: async () => JSON.stringify(web.manifest ?? {}) };
+    }
+    if (web.tarball && u.endsWith(".tgz")) {
+      const bytes = web.tarball;
+      return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    }
+    return { ok: false, status: 404, text: async () => "" };
+  };
+  return { posts, postUrls, gets, impl };
+}
 
 function sink() {
   /** @type {string[]} */
@@ -18,268 +109,284 @@ function sink() {
 }
 
 /**
- * A fetch double that answers each POST from a queue, keyed by nothing but order.
- * @param {any[]} responses
- */
-function fetchQueue(responses) {
-  /** @type {any[]} */
-  const calls = [];
-  const queue = [...responses];
-  return {
-    calls,
-    impl: async (/** @type {any} */ url, /** @type {any} */ init) => {
-      calls.push(JSON.parse(init.body));
-      const body = queue.shift() ?? { jsonrpc: "2.0", id: 1, result: {} };
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        text: async () => JSON.stringify(body),
-      };
-    },
-  };
-}
-
-/**
- * The doubles above are deliberately partial: a fetch stand-in that returns four
- * fields, and a writable that only collects strings. Casting here rather than
- * loosening runCheck's own JSDoc keeps the production signature honest -- the test
- * is what is approximate, not the function under test.
- * @param {any} fetchImpl
- * @param {any} stdout
- * @param {any} stderr
+ * The doubles are deliberately partial; casting here rather than loosening
+ * runCheck's own JSDoc keeps the production signature honest.
+ * @param {any} fetchImpl @param {any} stdout @param {any} stderr
  * @returns {any}
  */
-function io(fetchImpl, stdout, stderr) {
+function io(fetchImpl, stdout = sink(), stderr = sink()) {
   return { fetchImpl, stdout, stderr };
 }
 
-const toolResult = (/** @type {any} */ payload) => ({
-  jsonrpc: "2.0",
-  id: 1,
-  result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
-});
+/** @param {any} result @param {any} [opts] @param {any} [config] */
+async function check(result, opts = {}, config = KEYED) {
+  const n = network([INIT, toolResult(result)]);
+  const out = sink();
+  const err = sink();
+  const res = await runCheck(config, URL_REF, io(n.impl, out, err), opts);
+  return { res, out: out.text(), err: err.text(), n };
+}
+
+// --- the command line ---
 
 // The bug this catches was live for one edit: `check` and the URL are both bare
 // words, and the original parser let the LAST bare word win, so
 // `check https://x/y.js` parsed the URL as the command and ran the proxy instead.
-// A wrong command that looks like a hang is the worst possible failure for the
-// first command a stranger ever types.
 test("parseArgs keeps the command and the artifact separate", () => {
-  const parsed = parseArgs(["check", "https://example.com/tool.js"]);
+  const parsed = parseArgs(["check", URL_REF]);
   assert.equal(parsed.command, "check");
-  assert.equal(parsed.artifactRef, "https://example.com/tool.js");
+  assert.equal(parsed.artifactRef, URL_REF);
+  assert.deepEqual(parsed.errors, []);
 });
 
 test("parseArgs still honours flags around the artifact", () => {
-  const parsed = parseArgs(["check", "https://example.com/t.js", "--key", "kw_x"]);
-  assert.equal(parsed.command, "check");
-  assert.equal(parsed.artifactRef, "https://example.com/t.js");
+  const parsed = parseArgs(["check", URL_REF, "--key", "kw_x", "--fail-on", "install-scripts,network", "--json"]);
+  assert.equal(parsed.artifactRef, URL_REF);
   assert.equal(parsed.overrides.apiKey, "kw_x");
+  assert.equal(parsed.failOn, "install-scripts,network");
+  assert.equal(parsed.json, true);
+  assert.deepEqual(parsed.errors, []);
+});
+
+// Until 0.3.0 an unknown option was ignored and a trailing --fail-on read
+// undefined: a misspelt gate passed the build.
+test("parseArgs refuses what it does not understand", () => {
+  assert.match(parseArgs(["check", URL_REF, "--fail-onn", "rejected"]).errors.join(), /unknown option "--fail-onn"/);
+  assert.match(parseArgs(["check", URL_REF, "--fail-on"]).errors.join(), /--fail-on needs a value/);
+  assert.match(parseArgs(["check", URL_REF, "--fail-on", "--json"]).errors.join(), /--fail-on needs a value/);
+  assert.match(parseArgs(["check", URL_REF, "extra"]).errors.join(), /unexpected argument "extra"/);
+  assert.match(parseArgs(["chekc", URL_REF]).errors.join(), /unknown command "chekc"/);
+  assert.match(parseArgs(["doctor", "x"]).errors.join(), /unexpected argument "x"/);
+  assert.equal(parseArgs(["check", URL_REF, "--no-verify"]).verify, false);
 });
 
 test("a non-https artifact is refused locally, before any request is made", async () => {
-  const q = fetchQueue([]);
+  const n = network([]);
   const err = sink();
-  const res = await runCheck(CONFIG, "ftp://example.com/x.js", io(q.impl, sink(), err));
-  assert.equal(res.ok, false);
-  assert.equal(q.calls.length, 0, "must not spend a network round trip on an input we can already reject");
+  const res = await runCheck(CONFIG, "ftp://example.com/x.js", io(n.impl, sink(), err));
+  assert.equal(res.code, EXIT.USAGE);
+  assert.equal(n.posts.length + n.gets.length, 0, "must not spend a round trip on an input we can already reject");
   assert.match(err.text(), /https URL/);
 });
 
-// The whole point of the command: someone who has never heard of Kenwea types one
-// line and gets a verdict. If it ever demands a key first, it has lost the person
-// it exists for.
-test("with no key it mints one, says so, and shows it", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} }, // initialize
-    toolResult({ apiKey: { rawKey: "kw_agent_minted" } }), // registerSelf
-    toolResult({ checked: true, verdict: "approved", ran: true, exitCode: 0, contentSha256: "abc" }),
-  ]);
-  const out = sink();
-  const res = await runCheck(CONFIG, "https://example.com/tool.js", io(q.impl, out, sink()));
+// --- routes ---
 
-  assert.equal(res.ok, true);
+// Someone who has never heard of Kenwea types one line and gets a verdict. With
+// no key it asks the keyless notary and creates nothing on their behalf.
+test("with no key it asks the keyless notary and creates nothing", async () => {
+  const { res, n, out } = await check(record({}), {}, CONFIG);
+  assert.equal(res.code, EXIT.OK);
   assert.equal(res.verdict, "approved");
-  assert.equal(q.calls[1].params.name, "kenwea.onboarding.registerSelf");
-  assert.equal(q.calls[1].params.arguments.agentName, "kenwea-mcp-check", "the field is agentName, not name");
-  assert.equal(q.calls[2].params.name, "kenwea.sandbox.check");
-  // A credential created on someone's behalf and never shown to them is exactly
-  // the thing this project refuses to do elsewhere.
-  assert.match(out.text(), /kw_agent_minted/);
+  assert.equal(n.posts.length, 2, "initialize and the check, nothing else");
+  assert.equal(n.posts[1].params.name, "kenwea.notary.check");
+  assert.ok(n.postUrls.every((u) => u === "https://mcp.example/notary/v1"), `went to ${n.postUrls.join(", ")}`);
+  assert.ok(!n.posts.some((c) => c.params && c.params.name === "kenwea.onboarding.registerSelf"));
+  assert.doesNotMatch(out, /kw_/);
 });
 
-test("an existing key is used as-is and no agent is created", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: true, verdict: "approved", ran: true, exitCode: 0 }),
+test("an existing key keeps the keyed route and its own quota", async () => {
+  const { n } = await check(record({}));
+  assert.equal(n.posts[1].params.name, "kenwea.sandbox.check");
+  assert.ok(n.postUrls.every((u) => u === CONFIG.url));
+});
+
+test("a notary refusal is no answer, with the way around a rate limit", async () => {
+  const n = network([
+    INIT,
+    { jsonrpc: "2.0", id: 1, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "rate_limited", detail: "resets in 60 seconds" }) }] } },
   ]);
-  await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/tool.js", io(q.impl, sink(), sink()));
-  const registered = q.calls.some((c) => c.params && c.params.name === "kenwea.onboarding.registerSelf");
-  assert.equal(registered, false, "a caller who brought a key must not have a second agent minted for them");
-});
-
-// An honest non-answer is not a failure. Exiting non-zero here would train callers
-// to read "we could not fetch it" as "the artifact is bad" -- which is the single
-// most damaging thing a verdict tool can do.
-test("an unfetchable artifact reports why and does not claim a verdict", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: false, reason: "scheme_not_fetchable", note: "nothing was executed" }),
-  ]);
-  const out = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/x", io(q.impl, out, sink()));
-  assert.equal(res.ok, true);
-  assert.equal(res.verdict, null);
-  assert.match(out.text(), /NOT CHECKED/);
-  assert.doesNotMatch(out.text(), /APPROVED/);
-});
-
-test("a rejected verdict is rendered with its reason and the sandbox output", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({
-      checked: true,
-      verdict: "rejected",
-      verdictReason: "the artifact ran and exited non-zero",
-      ran: true,
-      exitCode: 1,
-      executable: "node",
-      output: "Error: Cannot find module './src/common'",
-    }),
-  ]);
-  const out = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/x.js", io(q.impl, out, sink()));
-  assert.equal(res.ok, true);
-  assert.equal(res.verdict, "rejected");
-  assert.match(out.text(), /REJECTED/);
-  assert.match(out.text(), /exited non-zero/);
-  assert.match(out.text(), /Cannot find module/, "a verdict without the reason behind it is not actionable");
-});
-
-// --- npm package resolution: a developer types a name, not a tarball URL ---
-
-/**
- * A fetch double that answers the registry GET with a manifest and the MCP POSTs
- * from a queue. Branches on method so a bodyless GET never hits JSON.parse.
- * @param {string} tarball  the dist.tarball the registry should report
- * @param {any[]} mcp       ordered MCP responses
- */
-function registryAndMcp(tarball, mcp) {
-  /** @type {any[]} */
-  const posts = [];
-  /** @type {string[]} */
-  const gets = [];
-  const queue = [...mcp];
-  const impl = async (/** @type {any} */ url, /** @type {any} */ init) => {
-    if (!init || !init.body) {
-      gets.push(String(url));
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({ name: "express", version: "4.18.2", dist: { tarball } }),
-      };
-    }
-    posts.push(JSON.parse(init.body));
-    const body = queue.shift() ?? { jsonrpc: "2.0", id: 1, result: {} };
-    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(body) };
-  };
-  return { posts, gets, impl };
-}
-
-test("a bare package name is resolved to its registry tarball, then checked", async () => {
-  const tarball = "https://registry.npmjs.org/express/-/express-4.18.2.tgz";
-  const d = registryAndMcp(tarball, [
-    { jsonrpc: "2.0", id: 1, result: {} }, // initialize
-    toolResult({ checked: true, verdict: "approved", ran: true, exitCode: 0, contentSha256: "abc" }),
-  ]);
-  const out = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "express@4.18.2", io(d.impl, out, sink()));
-  assert.equal(res.ok, true);
-  assert.equal(d.gets.length, 1, "must ask the registry exactly once");
-  assert.match(d.gets[0], /registry\.npmjs\.org\/express\/4\.18\.2/);
-  // The sandbox call must carry the RESOLVED tarball, not the bare spec.
-  const sandboxCall = d.posts.find((m) => m.params && m.params.name === "kenwea.sandbox.check");
-  assert.equal(sandboxCall.params.arguments.artifactRef, tarball);
-  assert.match(out.text(), /Resolved express@4\.18\.2/, "the bytes under the verdict must not be a mystery");
-});
-
-test("a malformed non-https URL is rejected locally, no registry call", async () => {
-  const d = registryAndMcp("https://x/y.tgz", []);
   const err = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "ftp://example.com/x.js", io(d.impl, sink(), err));
-  assert.equal(res.ok, false);
-  assert.equal(d.gets.length, 0);
-  assert.equal(d.posts.length, 0);
-  assert.match(err.text(), /npm package name/);
+  const res = await runCheck(CONFIG, URL_REF, io(n.impl, sink(), err));
+  assert.equal(res.code, EXIT.NO_ANSWER);
+  assert.match(err.text(), /rate_limited: resets in 60 seconds/);
+  assert.match(err.text(), /KENWEA_API_KEY/);
 });
 
-// --- CI gate: --fail-on turns a verdict into an exit code ---
+// --- an honest non-answer ---
 
-/** @param {string} verdict @param {string|undefined} failOn */
-async function checkWithVerdict(verdict, failOn) {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: true, verdict, ran: verdict !== "notarized", contentSha256: "abc" }),
-  ]);
-  return runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/x.js", io(q.impl, sink(), sink()), { failOn });
+test("an unfetchable artifact reports why, claims no verdict, and is not a failure without a gate", async () => {
+  const { res, out } = await check({ checked: false, reason: "scheme_not_fetchable", note: "nothing was executed" });
+  assert.equal(res.code, EXIT.OK);
+  assert.equal(res.verdict, null);
+  assert.match(out, /NOT CHECKED/);
+  assert.doesNotMatch(out, /APPROVED/);
+});
+
+// A gate that asked a question and got no answer must not pass the build.
+test("with a gate, an honest non-answer fails closed", async () => {
+  const { res, err } = await check({ checked: false, reason: "http_404" }, { failOn: "rejected" });
+  assert.equal(res.code, EXIT.NO_ANSWER);
+  assert.match(err, /nothing was checked/);
+});
+
+// --- verification, here and not by asking the server ---
+
+test("a signed record is verified here against the key it names", async () => {
+  const { res, out } = await check(record({ verdict: "rejected", reasonCode: "exited_nonzero", verdictReason: "the artifact ran and exited non-zero" }, { unsigned: { output: "Error: Cannot find module './src/common'", executable: "node", exitCode: 1 } }));
+  assert.equal(res.code, EXIT.OK, "reporting a verdict is success when nothing is gated");
+  assert.equal(res.verdict, "rejected");
+  assert.match(out, /REJECTED \(exited_nonzero\)/);
+  assert.match(out, /Cannot find module/, "a verdict without the reason behind it is not actionable");
+  assert.match(out, new RegExp(`verified    here, against the published key ${ACTIVE.entry.keyId} \\(active\\)`));
+});
+
+test("records that must not be believed exit 4, each with its reason", async () => {
+  const good = record({});
+  const tampered = structuredClone(good);
+  tampered.signedAttestation.payload = tampered.signedAttestation.payload.replace('"approved"', '"rejected"');
+  tampered.verdict = "rejected";
+  const unsigned = { ...good, signedAttestation: undefined };
+  /** @type {Record<string, [any, RegExp]>} */
+  const cases = {
+    "altered after signing": [tampered, /does not match the payload/],
+    "signed with a revoked key": [record({}, { key: REVOKED }), /revoked \(the seed was kept/],
+    "an unpublished key": [record({}, { key: makeKey("active") }), /not in the published key list/],
+    "no signature": [unsigned, /no signature/],
+    "about another address": [record({ artifactRef: "https://example.com/other.js" }), /is about https:\/\/example.com\/other.js/],
+    "unsigned verdict disagrees": [record({ verdict: "rejected" }, { unsigned: { verdict: "approved" } }), /unsigned verdict differs/],
+    "another issuer": [record({ issuer: "example.org" }), /issuer/],
+  };
+  for (const [name, [result, why]] of Object.entries(cases)) {
+    const { res, err } = await check(result, { failOn: "rejected" });
+    assert.equal(res.code, EXIT.UNVERIFIED, name);
+    assert.match(err, why, name);
+  }
+});
+
+test("a record from before keys were named is tried against every published key", async () => {
+  const { res } = await check(record({}, { format1: true }));
+  assert.equal(res.code, EXIT.OK);
+  const { res: old, err } = await check(record({}, { format1: true, key: REVOKED }));
+  assert.equal(old.code, EXIT.UNVERIFIED);
+  assert.match(err, /revoked/);
+});
+
+test("--no-verify is for a server without Kenwea's key, and gates still read the record", async () => {
+  const { res } = await check({ checked: true, verdict: "approved", ran: true, exitCode: 0 }, { verify: false });
+  assert.equal(res.code, EXIT.OK);
+  const { res: gated } = await check({ checked: true, verdict: "rejected" }, { verify: false, failOn: "rejected" });
+  assert.equal(gated.code, EXIT.GATE);
+});
+
+// --- gates read the signed facts ---
+
+test("verdict gates: rejected fails on rejected; manual_review also on manual_review", async () => {
+  for (const [verdict, gate, code] of [
+    ["rejected", "rejected", EXIT.GATE],
+    ["manual_review", "rejected", EXIT.OK],
+    ["approved", "rejected", EXIT.OK],
+    ["manual_review", "manual_review", EXIT.GATE],
+    ["rejected", "manual_review", EXIT.GATE],
+    ["notarized", "manual_review", EXIT.OK],
+    ["approved", undefined, EXIT.OK],
+    ["rejected", undefined, EXIT.OK],
+  ]) {
+    const { res } = await check(record({ verdict }), { failOn: gate });
+    assert.equal(res.code, code, `${verdict} under --fail-on ${gate}`);
+  }
+});
+
+test("a verdict this client does not know fails a verdict gate closed", () => {
+  assert.match(gateRefusals(["rejected"], { verdict: "approved_with_caveats" }).join(), /not one this client knows/);
+});
+
+test("install-scripts fails when anything runs at install, and when the record does not say", () => {
+  assert.deepEqual(gateRefusals(["install-scripts"], { verdict: "manual_review", installSteps: [] }), []);
+  assert.match(gateRefusals(["install-scripts"], { verdict: "approved", installSteps: ["postinstall"] }).join(), /runs 1 install step \(postinstall\)/);
+  assert.match(gateRefusals(["install-scripts"], { verdict: "approved" }).join(), /does not say what runs at install/);
+});
+
+test("network fails on any attempt, passes when nothing ran, and cannot pass on a cut trace", () => {
+  const quiet = { network: [], dns: [], programs: ["node"], missing: [], truncated: false };
+  assert.deepEqual(gateRefusals(["network"], { installSteps: ["postinstall"], observed: quiet }), []);
+  assert.deepEqual(gateRefusals(["network"], { installSteps: [] }), [], "nothing ran, so nothing reached");
+  assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, dns: ["scarf.sh"] } }).join(), /scarf\.sh/);
+  assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, network: ["93.184.215.14:443"] } }).join(), /93\.184/);
+  assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, truncated: true } }).join(), /cannot say/);
+  assert.match(gateRefusals(["network"], { installSteps: ["postinstall"] }).join(), /cannot say/);
+  // esbuild on 2026-10-08: stopped at our step limit having reached nothing yet.
+  assert.match(gateRefusals(["network"], { reasonCode: "step_timed_out", installSteps: ["postinstall"], observed: { ...quiet, programs: ["node", "npm"] } }).join(), /did not finish/);
+});
+
+test("several gates are all applied, from the signed facts", async () => {
+  const { res, err } = await check(
+    record({ verdict: "manual_review", reasonCode: "ran_tried_network", installSteps: ["postinstall"], observed: { network: [], dns: ["scarf.sh"], programs: ["node"], missing: [], truncated: false } }),
+    { failOn: "install-scripts,network" },
+  );
+  assert.equal(res.code, EXIT.GATE);
+  assert.match(err, /install step/);
+  assert.match(err, /scarf\.sh/);
+});
+
+// --- an npm package: resolved, checked, and tied to the bytes npm installs ---
+
+const TARBALL_URL = "https://registry.npmjs.org/express/-/express-4.18.2.tgz";
+const BYTES = Buffer.from("the tarball npm would install");
+const SHA256 = createHash("sha256").update(BYTES).digest("hex");
+const MANIFEST = {
+  name: "express",
+  version: "4.18.2",
+  dist: { tarball: TARBALL_URL, integrity: "sha512-" + createHash("sha512").update(BYTES).digest("base64") },
+};
+
+/** @param {any} result @param {any} [web] @param {any} [opts] */
+async function checkPackage(result, web = {}, opts = {}) {
+  const n = network([INIT, toolResult(result)], { manifest: MANIFEST, tarball: BYTES, ...web });
+  const out = sink();
+  const err = sink();
+  const res = await runCheck(KEYED, "express@4.18.2", io(n.impl, out, err), opts);
+  return { res, n, out: out.text(), err: err.text() };
 }
 
-test("without --fail-on, even a rejected verdict exits 0 (reporting is success)", async () => {
-  const res = await checkWithVerdict("rejected", undefined);
-  assert.equal(res.ok, true);
+test("a package name is resolved, checked, and the record tied to the tarball npm installs", async () => {
+  const { res, n, out } = await checkPackage(record({ artifactRef: TARBALL_URL, contentSha256: SHA256, installSteps: [] }));
+  assert.equal(res.code, EXIT.OK);
+  assert.ok(n.gets.some((u) => /registry\.npmjs\.org\/express\/4\.18\.2$/.test(u)), "asks the registry");
+  assert.equal(n.posts[1].params.arguments.artifactRef, TARBALL_URL, "checks the resolved tarball, not the spec");
+  assert.ok(n.gets.includes(TARBALL_URL), "downloads the tarball to compare");
+  assert.match(out, /Resolved express@4\.18\.2/);
+  assert.match(out, /at install  nothing runs/);
 });
 
-test("--fail-on rejected fails on rejected but not on manual_review", async () => {
-  assert.equal((await checkWithVerdict("rejected", "rejected")).ok, false);
-  assert.equal((await checkWithVerdict("manual_review", "rejected")).ok, true);
-  assert.equal((await checkWithVerdict("approved", "rejected")).ok, true);
+test("a record about other bytes than npm's is refused", async () => {
+  const other = await checkPackage(record({ artifactRef: TARBALL_URL, contentSha256: "cd".repeat(32) }));
+  assert.equal(other.res.code, EXIT.UNVERIFIED);
+  assert.match(other.err, /not about the bytes npm installs/);
+  const badIntegrity = await checkPackage(record({ artifactRef: TARBALL_URL, contentSha256: SHA256 }), { manifest: { ...MANIFEST, dist: { ...MANIFEST.dist, integrity: "sha512-AAAA" } } });
+  assert.equal(badIntegrity.res.code, EXIT.UNVERIFIED);
+  assert.match(badIntegrity.err, /integrity/);
 });
 
-test("--fail-on manual_review also fails on rejected, not on a clean verdict", async () => {
-  assert.equal((await checkWithVerdict("manual_review", "manual_review")).ok, false);
-  assert.equal((await checkWithVerdict("rejected", "manual_review")).ok, false);
-  assert.equal((await checkWithVerdict("approved", "manual_review")).ok, true);
-  assert.equal((await checkWithVerdict("notarized", "manual_review")).ok, true);
+test("a package the registry does not know is no answer", async () => {
+  const { res, err } = await checkPackage(record({}), { manifest: null });
+  assert.equal(res.code, EXIT.NO_ANSWER);
+  assert.match(err, /could not resolve/);
 });
 
-test("an honest non-answer (checked=false) never trips the gate", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: false, reason: "the artifact was not retrieved" }),
-  ]);
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/x.js", io(q.impl, sink(), sink()), { failOn: "manual_review" });
-  assert.equal(res.ok, true, "we could not read it must never become a red build");
-});
-
-// --- --json: machine-readable stdout for scripts and the GitHub Action ---
+// --- output ---
 
 test("--json prints only the result object on stdout, notices on stderr", async () => {
-  const d = registryAndMcp("https://registry.npmjs.org/express/-/express-4.18.2.tgz", [
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: true, verdict: "approved", ran: true, exitCode: 0, contentSha256: "abc123" }),
-  ]);
-  const out = sink();
-  const err = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "express@4.18.2", io(d.impl, out, err), { json: true });
-  assert.equal(res.ok, true);
-  // stdout must parse as exactly the result object -- nothing else on it.
-  const parsed = JSON.parse(out.text());
-  assert.equal(parsed.verdict, "approved");
-  assert.equal(parsed.contentSha256, "abc123");
-  // the "Resolved …" notice must be on stderr, or it would corrupt the JSON.
-  assert.match(err.text(), /Resolved express/);
-  assert.doesNotMatch(out.text(), /Resolved/);
+  const { res, out, err } = await checkPackage(record({ artifactRef: TARBALL_URL, contentSha256: SHA256 }), {}, { json: true });
+  assert.equal(res.code, EXIT.OK);
+  assert.equal(JSON.parse(out).contentSha256, SHA256);
+  assert.match(err, /Resolved express/);
+  assert.doesNotMatch(out, /Resolved/);
 });
 
 test("--json still honours --fail-on for the exit code", async () => {
-  const q = fetchQueue([
-    { jsonrpc: "2.0", id: 1, result: {} },
-    toolResult({ checked: true, verdict: "rejected", ran: true, exitCode: 1, contentSha256: "abc" }),
-  ]);
-  const out = sink();
-  const res = await runCheck({ ...CONFIG, apiKey: "kw_existing" }, "https://example.com/x.js", io(q.impl, out, sink()), { json: true, failOn: "rejected" });
-  assert.equal(res.ok, false, "the gate still fires in json mode");
-  assert.equal(JSON.parse(out.text()).verdict, "rejected", "and the JSON is still emitted");
+  const { res, out } = await check(record({ verdict: "rejected" }), { json: true, failOn: "rejected" });
+  assert.equal(res.code, EXIT.GATE);
+  assert.equal(JSON.parse(out).verdict, "rejected", "and the JSON is still emitted");
+});
+
+// A package's own install output reaches a CI log through this command. It must
+// not be able to speak to the runner or the terminal.
+test("output from the package cannot issue workflow commands or escape sequences", async () => {
+  const hostile = "fine\n::set-output name=verdict::approved\n  ::add-mask::x\n##[error]fake\n\u001b[2Jcleared\u0007";
+  const { out } = await check(record({}, { unsigned: { output: hostile } }));
+  assert.doesNotMatch(out, /^\s*::/m);
+  assert.doesNotMatch(out, /##\[/);
+  assert.doesNotMatch(out, /\u001b|\u0007/);
+  assert.match(out, /: :set-output/);
+  assert.equal(sanitize("a\u001b]0;title\u0007b"), "ab");
 });

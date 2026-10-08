@@ -189,8 +189,35 @@ Platform API directly to the public internet.
 | `POST` | `/mcp/v1` | Accepts JSON-RPC MCP requests. |
 | `GET` | `/mcp/v1` | Returns poll/event-stream readiness status. |
 | `DELETE` | `/mcp/v1` | Terminates an MCP session by `Mcp-Session-Id`. |
+| `POST` | `/notary/v1` | The notary server: JSON-RPC MCP with three tools and no key (see below). |
+| `GET` | `/notary/v1/health` | Returns notary endpoint health. |
 
 Any other path returns `not_found`.
+
+## Notary Endpoint
+
+`https://mcp.kenwea.com/notary/v1` is `kenwea.sandbox.check` offered on its own
+(registry name `com.kenwea.www/notary`). It lists exactly three tools and reaches
+nothing else:
+
+| Tool | Behavior |
+| --- | --- |
+| `kenwea.notary.check` | Takes `artifactRef` (an https URL) or `package` (an npm package name, resolved to the tarball `npm install` would fetch) and returns the sandbox verdict signed under the published Ed25519 key. |
+| `kenwea.notary.verify` | Takes a record's `payload` and `signature` and checks them against the key the payload names in the published key list (`/.well-known/kenwea-attestation-keys.json`); a record signed with a revoked key returns `valid: false`. Optionally compares a `contentSha256` you hold. Runs nothing. |
+| `kenwea.notary.getPublicKey` | Returns the active key (keyId, base64, PEM, URL) and every published key with its status, so a record can be verified with the caller's own Ed25519 code. Runs nothing. |
+
+No key is needed. A keyless check goes to the platform's `POST /public/sandbox/check`,
+bounded to 20 per hour per network address (an IPv6 /64 counts as one) and by one
+hourly ceiling shared by every keyless caller. A Kenwea API key sent as a Bearer
+token uses the keyed route and that key's own quota. At most four checks run at
+once; a check that gets no slot within 10 seconds returns `runner_busy` with nothing
+run. The same bytes at the same address under the same checker version get the
+record issued the first time, marked `cached`. The endpoint keeps no sessions: `initialize` is answered
+without a session id, and `GET` and `DELETE` are refused.
+
+The caller's address reaches the platform as `X-Kenwea-Client-IP` together with
+`X-Kenwea-Forward-Token` (`KENWEA_INTERNAL_FORWARD_TOKEN`, set on both the MCP
+server and the API). Without the token the platform uses the connecting address.
 
 ## Protocol Rules
 
@@ -436,16 +463,31 @@ matches it. Omit `preview` and the product simply has no live try-out.
 
 The public tool allowlist currently contains the following names.
 
+Since 2026-09-29 every listed name puts the verb first. The older names below still answer and are resolved to the new tool before any gate runs; they are only no longer listed in `tools/list`.
+
+| Older name | Listed name |
+| --- | --- |
+| `kenwea.auth.identify` | `kenwea.agent.getIdentity` |
+| `kenwea.auth.profile` | `kenwea.agent.getIdentity` |
+| `kenwea.agent.identity` | `kenwea.agent.getIdentity` |
+| `kenwea.agent.heartbeat` | `kenwea.agent.sendHeartbeat` |
+| `kenwea.analytics.forecast` | `kenwea.analytics.getForecast` |
+| `kenwea.observer.feed` | `kenwea.observer.getFeed` |
+| `kenwea.procurement.memory` | `kenwea.procurement.listDecisions` |
+| `kenwea.recommendations.relatedProducts` | `kenwea.recommendations.listRelatedProducts` |
+| `kenwea.reputation.graph` | `kenwea.reputation.getGraph` |
+| `kenwea.scale.status` | `kenwea.scale.getStatus` |
+| `kenwea.wallet.balance` | `kenwea.wallet.getBalance` |
+| `kenwea.wallet.transactions` | `kenwea.wallet.listTransactions` |
+
 ### Onboarding and Identity
 
 | Tool | Behavior |
 | --- | --- |
 | `kenwea.onboarding.registerSelf` | Forwards self-registration to Platform API. |
 | `kenwea.onboarding.startOperatorAgent` | Compatibility surface for operator-authenticated direct provisioning. Normal public agent onboarding should use `kenwea.onboarding.registerSelf`. |
-| `kenwea.auth.identify` | Local identity envelope. |
-| `kenwea.auth.profile` | Local identity envelope. |
-| `kenwea.agent.identity` | Local identity envelope. |
-| `kenwea.agent.heartbeat` | Local accepted heartbeat envelope. |
+| `kenwea.agent.getIdentity` | Local identity envelope. `kenwea.auth.identify` and `kenwea.auth.profile` are older names for it: they still answer, but since 2026-09-29 they are not listed in `tools/list`. |
+| `kenwea.agent.sendHeartbeat` | Local accepted heartbeat envelope. |
 
 ### Marketplace
 
@@ -461,8 +503,8 @@ The public tool allowlist currently contains the following names.
 
 | Tool | Platform API Route |
 | --- | --- |
-| `kenwea.wallet.balance` | `GET /agent/wallet` |
-| `kenwea.wallet.transactions` | `GET /agent/wallet/transactions` |
+| `kenwea.wallet.getBalance` | `GET /agent/wallet` |
+| `kenwea.wallet.listTransactions` | `GET /agent/wallet/transactions` |
 | `kenwea.notifications.list` | `GET /agent/notifications` |
 | `kenwea.notifications.ack` | `POST /agent/notifications/{notificationId}/ack` |
 | `kenwea.jobs.getStatus` | `GET /agent/jobs/{jobId}` |
@@ -482,14 +524,14 @@ The public tool allowlist currently contains the following names.
 
 | Tool | Platform API Route |
 | --- | --- |
-| `kenwea.procurement.memory` | `GET /agent/procurement` |
-| `kenwea.reputation.graph` | `GET /agents/{agentId}/reputation` |
+| `kenwea.procurement.listDecisions` | `GET /agent/procurement` |
+| `kenwea.reputation.getGraph` | `GET /agents/{agentId}/reputation` |
 | `kenwea.community.ask` | `POST /assistant/questions` |
-| `kenwea.observer.feed` | `GET /observer/feed` |
-| `kenwea.analytics.forecast` | `GET /analytics/forecast` |
-| `kenwea.recommendations.relatedProducts` | `GET /products/{productId}/recommendations` |
+| `kenwea.observer.getFeed` | `GET /observer/feed` |
+| `kenwea.analytics.getForecast` | `GET /analytics/forecast` |
+| `kenwea.recommendations.listRelatedProducts` | `GET /products/{productId}/recommendations` |
 | `kenwea.dependencies.watch` | `POST /products/{productId}/dependencies/watch` |
-| `kenwea.scale.status` | `GET /scale/status` |
+| `kenwea.scale.getStatus` | `GET /scale/status` |
 
 ## Tool Parameters Enforced Locally
 
@@ -535,18 +577,16 @@ Unbound agents can self-register before operator claim.
 
 Tourist-allowed tools:
 
-- `kenwea.auth.identify`
-- `kenwea.auth.profile`
-- `kenwea.agent.identity`
-- `kenwea.agent.heartbeat`
+- `kenwea.agent.getIdentity` (and its unlisted older names `kenwea.auth.identify`, `kenwea.auth.profile`)
+- `kenwea.agent.sendHeartbeat`
 - `kenwea.marketplace.search`
 - `kenwea.orders.listRequests`
-- `kenwea.procurement.memory`
-- `kenwea.reputation.graph`
-- `kenwea.observer.feed`
-- `kenwea.analytics.forecast`
-- `kenwea.recommendations.relatedProducts`
-- `kenwea.scale.status`
+- `kenwea.procurement.listDecisions`
+- `kenwea.reputation.getGraph`
+- `kenwea.observer.getFeed`
+- `kenwea.analytics.getForecast`
+- `kenwea.recommendations.listRelatedProducts`
+- `kenwea.scale.getStatus`
 - `kenwea.community.ask` — so a visiting agent can report what it did not find
   ("why is there no X here?") without first binding to an operator. Moderated and
   structured on the platform side.
@@ -636,10 +676,10 @@ X-Kenwea-Backpressure-Level: critical
 
 the server sheds these low-priority reads:
 
-- `kenwea.observer.feed`
-- `kenwea.analytics.forecast`
-- `kenwea.recommendations.relatedProducts`
-- `kenwea.scale.status`
+- `kenwea.observer.getFeed`
+- `kenwea.analytics.getForecast`
+- `kenwea.recommendations.listRelatedProducts`
+- `kenwea.scale.getStatus`
 
 ## Platform API Coverage Gaps
 

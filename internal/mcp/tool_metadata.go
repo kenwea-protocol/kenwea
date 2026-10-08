@@ -39,13 +39,9 @@ func toolTitle(name string) string {
 		return "Start operator agent onboarding"
 	case "kenwea.onboarding.registerSelf":
 		return "Register yourself as an agent"
-	case "kenwea.auth.identify":
-		return "Identify the authenticated actor"
-	case "kenwea.auth.profile":
-		return "Read the actor profile"
-	case "kenwea.agent.identity":
+	case "kenwea.agent.getIdentity":
 		return "Read this agent's identity"
-	case "kenwea.agent.heartbeat":
+	case "kenwea.agent.sendHeartbeat":
 		return "Report liveness"
 	case "kenwea.marketplace.search":
 		return "Search the marketplace"
@@ -57,9 +53,9 @@ func toolTitle(name string) string {
 		return "Buy a product version"
 	case "kenwea.marketplace.install":
 		return "Install a purchased product"
-	case "kenwea.wallet.balance":
+	case "kenwea.wallet.getBalance":
 		return "Read wallet balance"
-	case "kenwea.wallet.transactions":
+	case "kenwea.wallet.listTransactions":
 		return "List wallet transactions"
 	case "kenwea.notifications.list":
 		return "List notifications"
@@ -79,21 +75,21 @@ func toolTitle(name string) string {
 		return "Create a collaboration"
 	case "kenwea.collab.join":
 		return "Join a collaboration"
-	case "kenwea.procurement.memory":
+	case "kenwea.procurement.listDecisions":
 		return "Read procurement history"
-	case "kenwea.reputation.graph":
+	case "kenwea.reputation.getGraph":
 		return "Read a reputation graph"
 	case "kenwea.community.ask":
 		return "Ask the marketplace a question"
-	case "kenwea.observer.feed":
+	case "kenwea.observer.getFeed":
 		return "Read the public activity feed"
-	case "kenwea.analytics.forecast":
+	case "kenwea.analytics.getForecast":
 		return "Read demand forecasts"
-	case "kenwea.recommendations.relatedProducts":
+	case "kenwea.recommendations.listRelatedProducts":
 		return "List related products"
 	case "kenwea.dependencies.watch":
 		return "Watch a product for changes"
-	case "kenwea.scale.status":
+	case "kenwea.scale.getStatus":
 		return "Read platform capacity"
 	}
 	return ""
@@ -102,7 +98,7 @@ func toolTitle(name string) string {
 // toolAnnotations returns the spec's behavioural hints.
 //
 // readOnlyHint is derived from what the tool WRITES, not from mutatingTools.
-// The two disagree on kenwea.agent.heartbeat, which is deliberately excluded
+// The two disagree on kenwea.agent.sendHeartbeat, which is deliberately excluded
 // from mutatingTools -- it is a low-stakes ping, not an economic action -- but
 // still updates last_heartbeat_at, so it is not read-only. Reusing that set here
 // would have published a false claim on the back of an unrelated decision.
@@ -125,12 +121,12 @@ func toolAnnotations(name string) map[string]any {
 	openWorld := false
 
 	switch name {
-	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity",
-		"kenwea.marketplace.search", "kenwea.wallet.balance", "kenwea.wallet.transactions",
+	case "kenwea.agent.getIdentity",
+		"kenwea.marketplace.search", "kenwea.wallet.getBalance", "kenwea.wallet.listTransactions",
 		"kenwea.notifications.list", "kenwea.jobs.getStatus", "kenwea.orders.listRequests",
-		"kenwea.procurement.memory", "kenwea.reputation.graph", "kenwea.observer.feed",
-		"kenwea.analytics.forecast", "kenwea.recommendations.relatedProducts",
-		"kenwea.scale.status":
+		"kenwea.procurement.listDecisions", "kenwea.reputation.getGraph", "kenwea.observer.getFeed",
+		"kenwea.analytics.getForecast", "kenwea.recommendations.listRelatedProducts",
+		"kenwea.scale.getStatus":
 		readOnly = true
 
 	case "kenwea.marketplace.preview":
@@ -166,7 +162,7 @@ func toolAnnotations(name string) map[string]any {
 		// stopped by calling again.
 		destructive = true
 
-	case "kenwea.agent.heartbeat", "kenwea.notifications.ack", "kenwea.dependencies.watch":
+	case "kenwea.agent.sendHeartbeat", "kenwea.notifications.ack", "kenwea.dependencies.watch":
 		// Genuinely idempotent: the second identical call leaves the same state.
 		idempotent = true
 	}
@@ -199,7 +195,7 @@ func prop(kind, description string) map[string]any {
 // from a tool's name or its description.
 func toolOutputSchema(name string) map[string]any {
 	switch name {
-	case "kenwea.auth.identify", "kenwea.auth.profile", "kenwea.agent.identity":
+	case "kenwea.agent.getIdentity":
 		return obj(map[string]any{
 			"actor": map[string]any{
 				"type":        "object",
@@ -208,7 +204,7 @@ func toolOutputSchema(name string) map[string]any {
 			"phase": prop("string", "Which platform phase served this read."),
 		})
 
-	case "kenwea.agent.heartbeat":
+	case "kenwea.agent.sendHeartbeat":
 		return obj(map[string]any{
 			"status": prop("string", "Liveness acknowledgement."),
 		})
@@ -228,27 +224,27 @@ func toolOutputSchema(name string) map[string]any {
 			"stateMachine": prop("string", "The request lifecycle this board follows."),
 		})
 
-	case "kenwea.observer.feed":
+	case "kenwea.observer.getFeed":
 		return obj(map[string]any{
 			"items":      map[string]any{"type": "array", "description": "Public marketplace events, newest first."},
 			"nextCursor": prop("string", "Pass back as `cursor` to continue; empty when the feed is exhausted."),
 			"publicSafe": prop("boolean", "Always true: these records are category-level aggregates and structurally cannot carry actor identity."),
 		})
 
-	case "kenwea.procurement.memory":
+	case "kenwea.procurement.listDecisions":
 		return obj(map[string]any{
 			"entries":    map[string]any{"type": []string{"array", "null"}, "description": "Past purchases and decisions; null when there are none."},
 			"secretSafe": prop("boolean", "Always true: procurement records never carry credentials."),
 		})
 
-	case "kenwea.analytics.forecast":
+	case "kenwea.analytics.getForecast":
 		return obj(map[string]any{
 			"reports":      map[string]any{"type": "array", "description": "Demand forecasts by category."},
 			"source":       prop("string", "What the forecast was computed from."),
 			"advisoryOnly": prop("boolean", "Always true: a forecast never changes pricing, permissions or ranking."),
 		})
 
-	case "kenwea.scale.status":
+	case "kenwea.scale.getStatus":
 		return obj(map[string]any{
 			"reports":      map[string]any{"type": "array", "description": "Capacity readings."},
 			"backpressure": prop("string", "Current backpressure state; use it to decide whether to defer non-urgent work."),
@@ -365,7 +361,7 @@ func toolOutputSchema(name string) map[string]any {
 			"InstallationID": prop("string", "The installation record."),
 		})
 
-	case "kenwea.wallet.balance":
+	case "kenwea.wallet.getBalance":
 		return obj(map[string]any{
 			"currency":      prop("string", "Wallet currency."),
 			"balanceCents":  prop("integer", "Spendable balance in minor units."),
@@ -374,7 +370,7 @@ func toolOutputSchema(name string) map[string]any {
 			"editable":      prop("boolean", "Always false: a balance is not something a caller can set."),
 		})
 
-	case "kenwea.wallet.transactions":
+	case "kenwea.wallet.listTransactions":
 		return obj(map[string]any{
 			"transactions":  map[string]any{"type": "array", "description": "Ledger entries, newest first."},
 			"balanceSource": prop("string", "append_only_ledger."),
@@ -415,11 +411,15 @@ func toolOutputSchema(name string) map[string]any {
 
 	case "kenwea.collab.join":
 		return obj(map[string]any{
-			"collabId": prop("string", "The collaboration joined."),
-			"status":   prop("string", "operator_approval."),
+			"collabId":                 prop("string", "The collaboration whose terms you accepted."),
+			"status":                   prop("string", "The collaboration's status, operator_approval until an operator approves it."),
+			"role":                     prop("string", "The role you accepted."),
+			"splitBps":                 prop("integer", "The share you accepted, in basis points."),
+			"accepted":                 prop("boolean", "Always true on success."),
+			"membersPendingAcceptance": prop("integer", "Members who have not accepted their terms yet."),
 		})
 
-	case "kenwea.reputation.graph":
+	case "kenwea.reputation.getGraph":
 		return obj(map[string]any{
 			"agentId":    prop("string", "Whose reputation this is."),
 			"dimensions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The dimensions scored."},
@@ -427,7 +427,7 @@ func toolOutputSchema(name string) map[string]any {
 			"source":     prop("string", "What the graph was computed from."),
 		})
 
-	case "kenwea.recommendations.relatedProducts":
+	case "kenwea.recommendations.listRelatedProducts":
 		return obj(map[string]any{
 			"productId":   prop("string", "The product the recommendations relate to."),
 			"edges":       map[string]any{"type": "array", "description": "Related products and why they are related."},

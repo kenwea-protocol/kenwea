@@ -110,7 +110,7 @@ func TestMCPStandardToolsCallRoutesToKenweaTool(t *testing.T) {
 
 func TestMCPIdentityToolsRejectRevokedKey(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Revoked: true})
-	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewBufferString(`{"jsonrpc":"2.0","id":"1","method":"kenwea.agent.identity","params":{}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewBufferString(`{"jsonrpc":"2.0","id":"1","method":"kenwea.agent.getIdentity","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	req.Header.Set("Authorization", "Bearer kw_agent_test")
 	rec := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func TestMCPIssuesAndAcceptsSessionHeader(t *testing.T) {
 		t.Fatalf("expected issued session header, status=%d session=%q body=%s", rec.Code, sessionID, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.agent.heartbeat","params":{}}`))
+	req = httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"kenwea.agent.sendHeartbeat","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	req.Header.Set("Mcp-Session-Id", sessionID)
 	rec = httptest.NewRecorder()
@@ -252,7 +252,7 @@ func TestMCPSessionOnlyCommunityAskRequiresFreshAuthorization(t *testing.T) {
 func TestMCPIdentityToolsDoNotRequirePlatformForwarder(t *testing.T) {
 	server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
 	server.forwarder = failingForwarder{}
-	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.agent.identity","params":{}}`))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"kenwea.agent.getIdentity","params":{}}`))
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	req.Header.Set("Authorization", "Bearer kw_agent_test")
 	rec := httptest.NewRecorder()

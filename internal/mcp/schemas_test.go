@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -160,7 +162,12 @@ func TestToolsListSerializesWithRealSchemas(t *testing.T) {
 		t.Fatalf("tool descriptors do not round trip: %v", err)
 	}
 	if len(tools) != len(allowedTools) {
-		t.Fatalf("tools/list returned %d tools, allowedTools has %d", len(tools), len(allowedTools))
+		t.Fatalf("tools/list returned %d tools, want %d", len(tools), len(allowedTools))
+	}
+	for _, tool := range tools {
+		if _, alias := unlistedAliases[tool.Name]; alias {
+			t.Fatalf("tools/list advertises %s, an unlisted alias", tool.Name)
+		}
 	}
 	// The regression this file exists to prevent: at least one tool with declared
 	// arguments, rather than 29 empty objects.
@@ -265,4 +272,85 @@ type schemaTestForwarder struct {
 func (f *schemaTestForwarder) ForwardTool(*http.Request, string, json.RawMessage) (map[string]any, error) {
 	f.called = true
 	return f.result, nil
+}
+
+// The aliases leave the list but not the server: a caller that already uses an
+// old name must get the same answer as before, and every alias must point at a
+// tool that is itself listed, with a description distinct from every other.
+func TestUnlistedAliasesStillAnswerAndListedDescriptionsAreDistinct(t *testing.T) {
+	listed := map[string]bool{}
+	seen := map[string]string{}
+	for _, tool := range mcpToolDescriptors() {
+		name := tool["name"].(string)
+		listed[name] = true
+		desc := tool["description"].(string)
+		if other, dup := seen[desc]; dup {
+			t.Fatalf("%s and %s share a description; an agent cannot tell them apart", other, name)
+		}
+		seen[desc] = name
+	}
+	for alias, target := range unlistedAliases {
+		if !allowedTool(alias) {
+			t.Fatalf("%s is no longer accepted; existing callers would break", alias)
+		}
+		if listed[alias] {
+			t.Fatalf("%s is an unlisted alias but tools/list offers it", alias)
+		}
+		if !listed[target] {
+			t.Fatalf("%s points at %s, which is not listed", alias, target)
+		}
+		if got := canonicalTool(alias); got != target {
+			t.Fatalf("%s resolves to %s, want %s", alias, got, target)
+		}
+	}
+}
+
+// Every older name, called the way an existing client calls it, reaches the same
+// handler as its replacement: a forwarded tool is forwarded under the new name,
+// and the identity aliases answer locally with the identity envelope. Checked
+// through ServeHTTP rather than canonicalTool alone, because the promise to an
+// existing caller is about the wire, not about a helper.
+func TestUnlistedAliasesAnswerOverTheWire(t *testing.T) {
+	for alias, target := range unlistedAliases {
+		forwarder := &recordingForwarder{result: map[string]any{"status": "accepted"}}
+		server := NewServer(StaticAuthenticator{Actor: Actor{Type: "agent", ID: "agent_01", AgentID: "agent_01", OperatorID: "op_01"}})
+		server.forwarder = forwarder
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":{"agentId":"agent_01","productId":"prod_01"}}}`, alias)
+		req := httptest.NewRequest(http.MethodPost, "/mcp/v1", strings.NewReader(body))
+		req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+		req.Header.Set("Authorization", "Bearer kw_agent_test")
+		rec := httptest.NewRecorder()
+
+		server.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"error"`) {
+			t.Fatalf("%s: status=%d body=%s", alias, rec.Code, rec.Body.String())
+		}
+		if forwardsToPlatform(target) {
+			if forwarder.method != target {
+				t.Fatalf("%s forwarded as %q, want %q", alias, forwarder.method, target)
+			}
+		} else if !strings.Contains(rec.Body.String(), "agent_01") {
+			t.Fatalf("%s did not answer with the identity envelope: %s", alias, rec.Body.String())
+		}
+	}
+}
+
+// A description that points an agent at another tool must point at one that is
+// listed. A rename that misses one cross-reference would otherwise send callers to
+// a name tools/list does not contain.
+func TestDescriptionsOnlyNameListedTools(t *testing.T) {
+	mention := regexp.MustCompile(`kenwea\.[a-zA-Z]+\.[a-zA-Z]+`)
+	for _, tool := range mcpToolDescriptors() {
+		name := tool["name"].(string)
+		for _, ref := range mention.FindAllString(tool["description"].(string), -1) {
+			if _, listed := allowedTools[ref]; listed {
+				continue
+			}
+			if _, alias := unlistedAliases[ref]; alias {
+				continue
+			}
+			t.Errorf("%s description names %s, which is neither listed nor an alias", name, ref)
+		}
+	}
 }
