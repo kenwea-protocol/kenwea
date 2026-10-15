@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -42,7 +43,7 @@ func structured(t *testing.T, r notaryReply) (map[string]any, bool) {
 	return sc, isErr
 }
 
-// Exactly three tools, on both protocol eras, and nothing from the marketplace can
+// Exactly four tools, on both protocol eras, and nothing from the marketplace can
 // be reached through this path.
 func TestNotaryListsThreeToolsAndReachesNothingElse(t *testing.T) {
 	forwarder := &recordingForwarder{}
@@ -64,8 +65,8 @@ func TestNotaryListsThreeToolsAndReachesNothingElse(t *testing.T) {
 	} {
 		_, list := callNotary(t, server, "tools/list", era.params, era.headers)
 		tools, _ := list.Result["tools"].([]any)
-		if len(tools) != 3 {
-			t.Fatalf("expected 3 notary tools, got %d: %v", len(tools), list)
+		if len(tools) != 4 {
+			t.Fatalf("expected 4 notary tools, got %d: %v", len(tools), list)
 		}
 	}
 
@@ -178,23 +179,23 @@ func TestNotaryToolsAreNotOnTheMainList(t *testing.T) {
 	}
 }
 
-// The notary's one pointer to the marketplace lives in its introduction, never
-// in a check result: a verdict carrying a sales pitch would stop reading as a
-// neutral third party's.
-func TestMarketplacePointerIsInTheIntroductionNotInResults(t *testing.T) {
+// The notary points nowhere else: not in its introduction (the Claude connector
+// directory does not let a server steer the model toward services the user did
+// not ask for) and not in a check result (a verdict carrying a sales pitch would
+// stop reading as a neutral third party's).
+func TestNotaryCarriesNoMarketplacePointer(t *testing.T) {
 	forwarder := &recordingForwarder{result: map[string]any{"checked": true, "verdict": "approved"}}
 	server := NewServer(StaticAuthenticator{})
 	server.forwarder = forwarder
 
 	_, init := callNotary(t, server, "initialize", `{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"1"}}`, nil)
-	if !strings.Contains(init.Result["instructions"].(string), "kenwea.onboarding.registerSelf") {
-		t.Fatalf("the introduction should say how a maker can list what it checked")
-	}
 	_, out := callNotary(t, server, "tools/call", `{"name":"kenwea.notary.check","arguments":{"package":"left-pad@1.3.0"}}`, nil)
-	raw, _ := json.Marshal(out.Result)
-	for _, pitch := range []string{"registerSelf", "marketplace", "offer it", "sale"} {
-		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(pitch)) {
-			t.Fatalf("a check result must not carry the marketplace pointer (%q): %s", pitch, raw)
+	for where, v := range map[string]any{"introduction": init.Result["instructions"], "check result": out.Result} {
+		raw, _ := json.Marshal(v)
+		for _, pitch := range []string{"registerSelf", "marketplace", "offer it", "sale"} {
+			if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(pitch)) {
+				t.Fatalf("the %s must not carry a marketplace pointer (%q): %s", where, pitch, raw)
+			}
 		}
 	}
 }
@@ -366,5 +367,42 @@ func TestNotaryKeyCacheFollowsARotation(t *testing.T) {
 	publishedKeys.mu.Unlock()
 	if got := verify(oldRecord, oldPriv); got["valid"] != false || got["keyStatus"] != "revoked" {
 		t.Fatalf("a revocation must survive the list becoming unreachable: %v", got)
+	}
+}
+
+// VS Code refuses a tool whose name holds anything but [a-z0-9_-], so the listed
+// names keep to that; the dotted names published before 2026-10-11 still answer.
+func TestNotaryNamesWorkInStrictClientsAndOldNamesStillAnswer(t *testing.T) {
+	server := NewServer(StaticAuthenticator{})
+	server.forwarder = &recordingForwarder{}
+	_, list := callNotary(t, server, "tools/list", `{}`, map[string]string{"MCP-Protocol-Version": "2025-11-25"})
+	tools, _ := list.Result["tools"].([]any)
+	valid := regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+	for _, tool := range tools {
+		name, _ := tool.(map[string]any)["name"].(string)
+		if !valid.MatchString(name) {
+			t.Fatalf("listed tool name %q is refused by VS Code", name)
+		}
+	}
+	for _, name := range []string{"kenwea_notary_get_public_key", "kenwea.notary.getPublicKey"} {
+		_, out := callNotary(t, server, "tools/call", `{"name":"`+name+`","arguments":{}}`, nil)
+		if out.Error != nil {
+			t.Fatalf("%s should answer, got %v", name, out.Error)
+		}
+	}
+}
+
+// The tree tool forwards the tree as given and refuses an empty call.
+func TestNotaryTreeForwardsTheTree(t *testing.T) {
+	forwarder := &recordingForwarder{result: map[string]any{"total": 2, "answered": 1}}
+	server := NewServer(StaticAuthenticator{})
+	server.forwarder = forwarder
+	_, out := callNotary(t, server, "tools/call", `{"name":"kenwea_notary_check_tree","arguments":{"packages":[{"name":"esbuild","version":"0.25.0","hasInstallScript":true}]}}`, nil)
+	if out.Error != nil || forwarder.method != "kenwea.notary.checkTree" {
+		t.Fatalf("expected a forwarded tree call, got %v (forwarded %q)", out.Error, forwarder.method)
+	}
+	_, empty := callNotary(t, server, "tools/call", `{"name":"kenwea_notary_check_tree","arguments":{}}`, nil)
+	if raw, _ := json.Marshal(empty.Result); !strings.Contains(string(raw), "validation_failed") {
+		t.Fatalf("an empty tree must be refused: %s", raw)
 	}
 }

@@ -291,7 +291,11 @@ test("a verdict this client does not know fails a verdict gate closed", () => {
 });
 
 test("install-scripts fails when anything runs at install, and when the record does not say", () => {
-  assert.deepEqual(gateRefusals(["install-scripts"], { verdict: "manual_review", installSteps: [] }), []);
+  assert.deepEqual(gateRefusals(["install-scripts"], { verdict: "manual_review", reasonCode: "no_install_steps", installSteps: [] }), []);
+  // No steps without no_install_steps is a check that did not find out (2026-10-15).
+  for (const code of ["extract_failed", "no_manifest", "report_unreliable", "runner_busy", undefined]) {
+    assert.match(gateRefusals(["install-scripts"], { verdict: "manual_review", reasonCode: code, installSteps: [] }).join(), /did not find out/, String(code));
+  }
   assert.match(gateRefusals(["install-scripts"], { verdict: "approved", installSteps: ["postinstall"] }).join(), /runs 1 install step \(postinstall\)/);
   assert.match(gateRefusals(["install-scripts"], { verdict: "approved" }).join(), /does not say what runs at install/);
 });
@@ -299,7 +303,8 @@ test("install-scripts fails when anything runs at install, and when the record d
 test("network fails on any attempt, passes when nothing ran, and cannot pass on a cut trace", () => {
   const quiet = { network: [], dns: [], programs: ["node"], missing: [], truncated: false };
   assert.deepEqual(gateRefusals(["network"], { installSteps: ["postinstall"], observed: quiet }), []);
-  assert.deepEqual(gateRefusals(["network"], { installSteps: [] }), [], "nothing ran, so nothing reached");
+  assert.deepEqual(gateRefusals(["network"], { reasonCode: "no_install_steps", installSteps: [] }), [], "nothing runs, so nothing reached");
+  assert.match(gateRefusals(["network"], { reasonCode: "extract_failed", installSteps: [] }).join(), /did not find out/, "a forged extract_failed must not pass");
   assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, dns: ["scarf.sh"] } }).join(), /scarf\.sh/);
   assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, network: ["93.184.215.14:443"] } }).join(), /93\.184/);
   assert.match(gateRefusals(["network"], { installSteps: ["postinstall"], observed: { ...quiet, truncated: true } }).join(), /cannot say/);
@@ -389,4 +394,15 @@ test("output from the package cannot issue workflow commands or escape sequences
   assert.doesNotMatch(out, /\u001b|\u0007/);
   assert.match(out, /: :set-output/);
   assert.equal(sanitize("a\u001b]0;title\u0007b"), "ab");
+});
+
+test("credentials: fails on a decoy read or sent, passes a quiet run, refuses an older checker", () => {
+  const quiet = { network: [], dns: [], programs: ["node"], missing: [], truncated: false };
+  const base = { checker: "2026-10-15.2", reasonCode: "ran_ok", installSteps: ["postinstall"] };
+  assert.deepEqual(gateRefusals(["credentials"], { ...base, observed: quiet }), []);
+  assert.match(gateRefusals(["credentials"], { ...base, observed: { ...quiet, credentialsRead: ["~/.npmrc (npm token)"] } }).join(), /read ~\/\.npmrc/);
+  assert.match(gateRefusals(["credentials"], { ...base, observed: { ...quiet, credentialsSent: ["npm token in data it sent"] } }).join(), /sent npm token/);
+  assert.match(gateRefusals(["credentials"], { ...base, checker: "2026-10-15.1", observed: quiet }).join(), /did not plant decoy/);
+  assert.deepEqual(gateRefusals(["credentials"], { checker: "2026-10-08.3", reasonCode: "no_install_steps", installSteps: [] }), [], "nothing runs, so nothing touched");
+  assert.match(gateRefusals(["network"], { ...base, observed: { ...quiet, credentialsSent: ["GitHub token in the arguments of wget"] } }).join(), /send a credential/);
 });

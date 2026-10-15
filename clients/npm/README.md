@@ -59,8 +59,16 @@ not read it, so we are not offering a verdict."
 
 ## What it actually does
 
+### A whole dependency tree: `check-tree` (0.6.0)
+
+```
+npx -y @kenwea/mcp@0.6.0 check-tree --fail-on network,credentials --wait 600
+```
+
+Your lockfile is read on your machine. Only the packages it marks `hasInstallScript` (usually a few percent of a tree) are sent to the notary, by name and version; the names of the rest never leave your machine. Each comes back with its stored signed record, made by the same sandbox run with decoy credentials, or is queued and checked in the background, about two a minute. Every record is verified here: the signature under the key it names, and the tarball matched against your lockfile's `integrity` and the record's sha256. A gate cannot pass on a package that has no record yet; `--wait <seconds>` asks again until it has. It reads package-lock.json (version 2 or 3), pnpm-lock.yaml (v5, v6, v9) and yarn.lock (v1 and berry), and with no path it uses whichever of them is in the current directory. pnpm up to v6 marks the packages that run something (`requiresBuild`); pnpm v9 and yarn do not, so those versions are asked of the npm registry from your machine, as an install does, and their names still do not go to Kenwea. A package that could not be classified is said, and a gate cannot pass on it. Integrity is checked with the strongest algorithm your lockfile lists, sha1 for old yarn entries included.
+
 1. Resolves your input. A package name goes to the npm registry to find the exact
-   tarball `npm install` would download; an https URL is fetched directly (10 MiB
+   tarball `npm install` would download; an https URL is fetched directly (32 MiB
    cap, redirects must stay on https).
 2. Routes on what the bytes actually are, not on the name:
    - **An npm tarball** is extracted inside a container and the install steps npm
@@ -88,6 +96,7 @@ not read it, so we are not offering a verdict."
    for an npm package, that the tarball npm installs matches the registry's
    `dist.integrity` and the record's sha256. A record that does not verify is
    reported as such, with exit code 4.
+   Since 0.3.1 the `install-scripts` and `network` gates pass on an empty step list only when the signed reason code is `no_install_steps`; a record that did not find out what runs (`extract_failed`, `no_manifest`, `report_unreliable`, a runner limit) fails them.
 
 Verdicts are `approved`, `manual_review`, `rejected`, or `notarized` for media. For
 a package, `approved` means every install step ran to completion, the trace was
@@ -111,8 +120,9 @@ Things it deliberately will not do:
 
 Scope, so you find out here rather than by being surprised: **Node and Python**
 execution, npm tarballs and single files, media notarization, and **20 checks per
-hour** per network address. Dependencies are not installed, so this measures a
-package's *own* install steps, not its transitive closure.
+hour** per network address. For a registry package the whole dependency tree is
+installed and every install step in it runs, the dependencies' first, each one
+named in the record.
 
 ## In CI
 
@@ -121,7 +131,7 @@ is a successful result, even when the verdict is `rejected`. To make a pipeline
 **block**, name the gates with `--fail-on` (comma separated):
 
 ```bash
-npx -y @kenwea/mcp@0.3.0 check express@4.18.2 --fail-on install-scripts,network
+npx -y @kenwea/mcp@0.4.0 check express@4.18.2 --fail-on install-scripts,network
 ```
 
 | Gate | Fails when the signed record says |
@@ -148,7 +158,7 @@ package's verdict is `approved` or `manual_review` — so gate on `install-scrip
 Add `--json` to get the raw result on stdout (progress goes to stderr) for scripting:
 
 ```bash
-npx -y @kenwea/mcp@0.3.0 check express@4.18.2 --json | jq .installSteps
+npx -y @kenwea/mcp@0.4.0 check express@4.18.2 --json | jq .installSteps
 ```
 
 Text from the package's own install output is printed with escape sequences removed

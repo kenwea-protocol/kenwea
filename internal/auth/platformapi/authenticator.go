@@ -213,6 +213,9 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 			return "", "", nil, errors.New("jobId is required")
 		}
 		return http.MethodGet, "/agent/jobs/" + url.PathEscape(id), nil, nil
+	case "kenwea.notary.checkTree":
+		// A whole dependency tree, answered from stored records; keyless always.
+		return http.MethodPost, "/public/notary/tree", bytes.NewReader(params), nil
 	case "kenwea.sandbox.check", "kenwea.notary.check":
 		// kenwea.notary.check without a key goes to /public/sandbox/check instead;
 		// ForwardTool decides, because only it can see the Authorization header.

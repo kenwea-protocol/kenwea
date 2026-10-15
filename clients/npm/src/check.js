@@ -42,7 +42,12 @@ export const KEYS_URL = "https://www.kenwea.com/.well-known/kenwea-attestation-k
 export const EXIT = Object.freeze({ OK: 0, GATE: 1, USAGE: 2, NO_ANSWER: 3, UNVERIFIED: 4 });
 
 /** What --fail-on accepts. Several can be given, comma separated. */
-export const GATES = Object.freeze(["manual_review", "rejected", "install-scripts", "network"]);
+export const GATES = Object.freeze(["manual_review", "rejected", "install-scripts", "network", "credentials"]);
+
+// Records from this checker on carry decoy credentials (credentialsRead,
+// credentialsSent); older ones never looked, so a gate on credentials cannot pass
+// on them. Checker versions are dates, so they compare as strings.
+const CREDENTIALS_SINCE = "2026-10-15.2";
 
 const KNOWN_VERDICTS = new Set(["approved", "notarized", "manual_review", "rejected"]);
 const UNFINISHED = new Set(["step_timed_out", "run_incomplete", "trace_unavailable", "runner_busy", "not_run"]);
@@ -50,7 +55,7 @@ const UNFINISHED = new Set(["step_timed_out", "run_incomplete", "trace_unavailab
 // the MCP server's 90 s; this is a little over that.
 const CHECK_TIMEOUT_MS = 120_000;
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_TARBALL_BYTES = 10 * 1024 * 1024;
+const MAX_TARBALL_BYTES = 32 * 1024 * 1024;
 const SPKI_ED25519_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 /**
@@ -228,6 +233,12 @@ export function gateRefusals(gates, facts) {
   const verdict = facts && typeof facts.verdict === "string" ? facts.verdict : "";
   const steps = facts && Array.isArray(facts.installSteps) ? facts.installSteps : null;
   const observed = facts && facts.observed && typeof facts.observed === "object" ? facts.observed : null;
+  // An empty step list is "nothing runs at install" only when the record says so
+  // in its reason code. extract_failed, no_manifest, report_unreliable and the
+  // runner's own limits also come with no steps, and until 0.3.1 they passed
+  // both gates: a package that could make the checker report one of those got
+  // through (2026-10-15).
+  const nothingRuns = steps !== null && steps.length === 0 && facts.reasonCode === "no_install_steps";
   for (const gate of gates) {
     switch (gate) {
       case "rejected":
@@ -240,10 +251,15 @@ export function gateRefusals(gates, facts) {
         break;
       case "install-scripts":
         if (!steps) refusals.push("the record does not say what runs at install, so --fail-on install-scripts cannot pass");
+        else if (!steps.length && !nothingRuns) refusals.push(`the check did not find out what runs at install (${sanitize(facts.reasonCode)}), so --fail-on install-scripts cannot pass`);
         else if (steps.length) refusals.push(`it runs ${steps.length} install step${steps.length === 1 ? "" : "s"} (${steps.map(sanitize).join(", ")}) and --fail-on install-scripts is set`);
         break;
       case "network": {
-        if (steps && steps.length === 0) break; // nothing ran, so nothing reached
+        if (nothingRuns) break; // nothing runs at install, so nothing reached
+        if (steps && steps.length === 0) {
+          refusals.push(`the check did not find out what runs at install (${sanitize(facts.reasonCode)}), so --fail-on network cannot pass`);
+          break;
+        }
         // A run that did not finish was watched only until it stopped.
         if (UNFINISHED.has(facts.reasonCode)) {
           refusals.push(`the install steps did not finish (${sanitize(facts.reasonCode)}), so the record cannot say what they would have reached and --fail-on network cannot pass`);
@@ -255,6 +271,23 @@ export function gateRefusals(gates, facts) {
         }
         const reached = [...(Array.isArray(observed.dns) ? observed.dns : []), ...(Array.isArray(observed.network) ? observed.network : [])];
         if (reached.length) refusals.push(`it tried to reach the network (${reached.map(sanitize).join(", ")}) and --fail-on network is set`);
+        const sent = Array.isArray(observed.credentialsSent) ? observed.credentialsSent : [];
+        if (sent.length) refusals.push(`it tried to send a credential (${sent.map(sanitize).join("; ")}) and --fail-on network is set`);
+        break;
+      }
+      case "credentials": {
+        if (nothingRuns) break;
+        if (typeof facts.checker !== "string" || facts.checker < CREDENTIALS_SINCE) {
+          refusals.push(`the record is from checker ${sanitize(facts.checker || "unknown")}, which did not plant decoy credentials, so --fail-on credentials cannot pass`);
+          break;
+        }
+        if (!observed || observed.truncated || UNFINISHED.has(facts.reasonCode)) {
+          refusals.push("the record cannot say what the install steps did with credentials, so --fail-on credentials cannot pass");
+          break;
+        }
+        const touched = [...(Array.isArray(observed.credentialsSent) ? observed.credentialsSent.map((/** @type {string} */ s) => `sent ${s}`) : []),
+          ...(Array.isArray(observed.credentialsRead) ? observed.credentialsRead.map((/** @type {string} */ s) => `read ${s}`) : [])];
+        if (touched.length) refusals.push(`an install step handled credentials (${touched.map(sanitize).join("; ")}) and --fail-on credentials is set`);
         break;
       }
       default:
@@ -351,7 +384,7 @@ async function fetchKeys(doFetch, keysUrl) {
  * @param {string} recordSha256
  * @returns {Promise<{ok: true} | {ok: false, error: string}>}
  */
-async function matchTarball(doFetch, pkg, recordSha256) {
+export async function matchTarball(doFetch, pkg, recordSha256) {
   /** @type {Buffer} */
   let bytes;
   try {
@@ -362,18 +395,33 @@ async function matchTarball(doFetch, pkg, recordSha256) {
     return { ok: false, error: `could not download the tarball: ${String((e && /** @type {any} */ (e).message) || e)}` };
   }
   if (bytes.length > MAX_TARBALL_BYTES) return { ok: false, error: "the tarball is larger than the notary reads" };
-  const sriOk = pkg.integrity
-    ? pkg.integrity
-        .split(/\s+/)
-        .filter((s) => s.startsWith("sha512-"))
-        .some((s) => s.slice(7) === createHash("sha512").update(bytes).digest("base64"))
-    : !!pkg.shasum && pkg.shasum === createHash("sha1").update(bytes).digest("hex");
+  const sriOk = pkg.integrity ? sriMatches(pkg.integrity, bytes) : !!pkg.shasum && pkg.shasum === createHash("sha1").update(bytes).digest("hex");
   if (!sriOk) return { ok: false, error: "the downloaded tarball does not match the registry's integrity hash" };
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   if (sha256 !== recordSha256.toLowerCase()) {
     return { ok: false, error: `the registry's tarball has sha256 ${sha256}, the record ${recordSha256 || "none"}` };
   }
   return { ok: true };
+}
+
+/**
+ * Subresource Integrity, as npm and yarn write it: the strongest algorithm the
+ * string lists decides (sha512 over sha1). Old yarn.lock entries carry only
+ * sha1, and were refused as mismatches until 0.6.0.
+ * @param {string} integrity
+ * @param {Buffer} bytes
+ */
+export function sriMatches(integrity, bytes) {
+  const rank = { sha1: 1, sha256: 2, sha384: 3, sha512: 4 };
+  const parts = integrity.split(/\s+/).map((t) => t.trim()).filter(Boolean).map((t) => {
+    const i = t.indexOf("-");
+    return { alg: t.slice(0, i), digest: t.slice(i + 1).split("?")[0] };
+  }).filter((p) => p.alg in rank);
+  if (!parts.length) return false;
+  const best = Math.max(...parts.map((p) => rank[/** @type {keyof typeof rank} */ (p.alg)]));
+  return parts
+    .filter((p) => rank[/** @type {keyof typeof rank} */ (p.alg)] === best)
+    .some((p) => p.digest === createHash(p.alg).update(bytes).digest("base64"));
 }
 
 /**
@@ -448,6 +496,8 @@ function render(result, artifactRef, signer) {
     lines.push("");
     return lines.join("\n");
   }
+  if (result.level) lines.push(`  level       ${sanitize(String(result.level).toUpperCase())}`);
+  if (result.summary) lines.push(`  in short    ${sanitize(result.summary)}`, "");
   lines.push(`  verdict     ${sanitize(String(result.verdict ?? "unknown").toUpperCase())}${result.reasonCode ? ` (${sanitize(result.reasonCode)})` : ""}`);
   if (result.verdictReason) lines.push(`  why         ${sanitize(result.verdictReason)}`);
   lines.push(`  sha256      ${sanitize(result.contentSha256 ?? "-")}`);
@@ -461,6 +511,8 @@ function render(result, artifactRef, signer) {
     lines.push(`  reached     ${reached.length ? reached.join(", ") : "nothing"}${observed.truncated ? " (trace cut, may be incomplete)" : ""}`);
     if (Array.isArray(observed.programs) && observed.programs.length) lines.push(`  started     ${observed.programs.map(sanitize).join(", ")}`);
     if (Array.isArray(observed.missing) && observed.missing.length) lines.push(`  not found   ${observed.missing.map(sanitize).join(", ")}`);
+    if (Array.isArray(observed.credentialsRead) && observed.credentialsRead.length) lines.push(`  read creds  ${observed.credentialsRead.map(sanitize).join(", ")} (decoys)`);
+    if (Array.isArray(observed.credentialsSent) && observed.credentialsSent.length) lines.push(`  SENT creds  ${observed.credentialsSent.map(sanitize).join("; ")} (decoys)`);
   }
   lines.push(`  executed    ${result.ran ? `yes (${sanitize(result.executable)})` : `no${result.notRunReason ? ` — ${sanitize(result.notRunReason)}` : ""}`}`);
   if (result.ran) lines.push(`  exit code   ${sanitize(result.exitCode)}`);
@@ -474,6 +526,11 @@ function render(result, artifactRef, signer) {
   }
   if (result.attestation) lines.push("", `  ${sanitize(result.attestation)}`);
   if (result.cached) lines.push("", "  cached      the record issued for these bytes earlier; nothing was run again");
+  const since = result.sincePrevious;
+  if (since && typeof since === "object" && since.summary) {
+    lines.push("", `  since ${sanitize(since.previous)}${" ".repeat(Math.max(1, 6 - String(since.previous).length))}${sanitize(since.summary)}`);
+    lines.push("              (from the npm registry, not part of the signed record)");
+  }
 
   // The signature is the difference between "Kenwea says this is fine" and evidence
   // you can forward, so the CLI surfaces it rather than leaving it in the JSON where
@@ -499,7 +556,7 @@ function render(result, artifactRef, signer) {
  * @param {any} body
  * @returns {any}
  */
-function extractToolResult(body) {
+export function extractToolResult(body) {
   const result = body && body.result;
   if (!result) return null;
   const text =
@@ -521,7 +578,7 @@ function extractToolResult(body) {
  * @param {string} url
  * @returns {string}
  */
-function notaryUrl(url) {
+export function notaryUrl(url) {
   if (/\/mcp\/v1\/?$/.test(url)) return url.replace(/\/mcp\/v1\/?$/, "/notary/v1");
   return new URL("/notary/v1", url).href;
 }
@@ -534,7 +591,7 @@ function notaryUrl(url) {
  * @param {number} [timeoutMs]
  * @returns {Promise<{ok: boolean, status: number, body: any, error: string|null}>}
  */
-async function rpc(doFetch, config, session, message, timeoutMs = FETCH_TIMEOUT_MS) {
+export async function rpc(doFetch, config, session, message, timeoutMs = FETCH_TIMEOUT_MS) {
   try {
     const res = await doFetch(config.url, {
       method: "POST",

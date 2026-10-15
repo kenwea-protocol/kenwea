@@ -19,6 +19,7 @@ import { runProxy } from "./proxy.js";
 import { runDoctor } from "./doctor.js";
 import { runInit } from "./init.js";
 import { runCheck, normaliseGates, GATES, EXIT } from "./check.js";
+import { runCheckTree } from "./tree.js";
 
 // Read from package.json rather than restated here.
 //
@@ -41,6 +42,15 @@ Usage:
                               root; for a package it runs the install steps npm would
                               run and traces what they attempt. No key, no signup.
                               The signed record is verified here before it is shown.
+  kenwea-mcp check-tree [lockfile]
+                              Check a whole dependency tree: package-lock.json,
+                              pnpm-lock.yaml or yarn.lock (found in the current
+                              directory if no path is given). Only the packages that
+                              run something at install are sent (their names and
+                              versions); where the lockfile does not say, the npm
+                              registry is asked from here. Each comes back with its
+                              stored signed record, verified here, or queued.
+                              --wait <seconds> asks again until queued ones are done.
   kenwea-mcp doctor           Check connectivity and authentication.
   kenwea-mcp init             Print ready-to-paste client configuration.
   kenwea-mcp [proxy]          Run the stdio<->HTTP bridge (default). MCP clients spawn this.
@@ -49,7 +59,10 @@ Options for check:
   --fail-on <gates>      Fail the run when the signed record trips a gate, so a CI
                          job can block on it. Comma separated, any of:
                            install-scripts  the package runs anything at install
-                           network          an install step tried to reach the network
+                           network          an install step tried to reach the network,
+                                            or to send a credential
+                           credentials      an install step read or sent one of the
+                                            decoy credentials the notary plants
                            manual_review    the verdict is manual_review or rejected
                            rejected         the verdict is rejected
                          A gate that gets no answer, or one that does not verify,
@@ -80,11 +93,11 @@ Examples:
 Default endpoint: https://mcp.kenwea.com/mcp/v1
 `;
 
-const COMMANDS = ["proxy", "init", "doctor", "check"];
+const COMMANDS = ["proxy", "init", "doctor", "check", "check-tree"];
 
 /**
  * @param {string[]} argv the args after `node cli.js`
- * @returns {{command: string, overrides: Partial<import("./config.js").BridgeConfig>, help: boolean, version: boolean, artifactRef: string|null, failOn: string|null, json: boolean, verify: boolean, errors: string[]}}
+ * @returns {{command: string, overrides: Partial<import("./config.js").BridgeConfig>, help: boolean, version: boolean, artifactRef: string|null, failOn: string|null, json: boolean, verify: boolean, waitSeconds: number, errors: string[]}}
  */
 export function parseArgs(argv) {
   /** @type {Partial<import("./config.js").BridgeConfig>} */
@@ -96,6 +109,8 @@ export function parseArgs(argv) {
   let failOn = null;
   let json = false;
   let verify = true;
+  /** @type {number} */
+  let waitSeconds = 0;
   let help = false;
   let version = false;
   let commandSeen = false;
@@ -138,6 +153,13 @@ export function parseArgs(argv) {
       case "--no-verify":
         verify = false;
         break;
+      case "--wait": {
+        const v = value(++i, arg);
+        const n = v === null ? NaN : Number(v);
+        if (v !== null && (!Number.isInteger(n) || n < 0 || n > 3600)) errors.push("--wait takes whole seconds from 0 to 3600");
+        else if (v !== null) waitSeconds = n;
+        break;
+      }
       case "--protocol":
         overrides.protocolVersion = value(++i, arg) ?? undefined;
         break;
@@ -157,12 +179,12 @@ export function parseArgs(argv) {
           if (!COMMANDS.includes(arg)) errors.push(`unknown command "${arg}"`);
           else command = arg;
           commandSeen = true;
-        } else if (command === "check" && artifactRef === null) artifactRef = arg;
+        } else if ((command === "check" || command === "check-tree") && artifactRef === null) artifactRef = arg;
         else errors.push(`unexpected argument "${arg}"`);
         break;
     }
   }
-  return { command, overrides, help, version, artifactRef, failOn, json, verify, errors };
+  return { command, overrides, help, version, artifactRef, failOn, json, verify, waitSeconds, errors };
 }
 
 /**
@@ -171,7 +193,7 @@ export function parseArgs(argv) {
  * @returns {Promise<number>} process exit code
  */
 export async function main(argv, env) {
-  const { command, overrides, help, version, artifactRef, failOn, json, verify, errors } = parseArgs(argv);
+  const { command, overrides, help, version, artifactRef, failOn, json, verify, waitSeconds, errors } = parseArgs(argv);
 
   if (errors.length && !help && !version) {
     for (const e of errors) process.stderr.write(`[kenwea-mcp] ${e}\n`);
@@ -210,6 +232,16 @@ export async function main(argv, env) {
         return EXIT.USAGE;
       }
       const { code } = await runCheck(config, artifactRef ?? "", {}, { failOn: gates, json, verify });
+      return code;
+    }
+    case "check-tree": {
+      const gates = normaliseGates(failOn ?? undefined);
+      const unknown = gates.filter((g) => !GATES.includes(g));
+      if (failOn !== null && (unknown.length || !gates.length)) {
+        process.stderr.write(`[kenwea-mcp] --fail-on takes one or more of: ${GATES.join(", ")} (got "${failOn}")\n`);
+        return EXIT.USAGE;
+      }
+      const { code } = await runCheckTree(config, artifactRef ?? "", {}, { failOn: gates, json, waitSeconds });
       return code;
     }
     case "proxy":
