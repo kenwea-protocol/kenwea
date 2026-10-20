@@ -239,6 +239,11 @@ export function gateRefusals(gates, facts) {
   // both gates: a package that could make the checker report one of those got
   // through (2026-10-15).
   const nothingRuns = steps !== null && steps.length === 0 && facts.reasonCode === "no_install_steps";
+  // The steps that ran in its dependency tree, signed (since checker
+  // 2026-10-15.6). A package with none of its own can still run something at
+  // install through a dependency, as swagger-ui-express does through
+  // @scarf/scarf; until 0.7.0 a gate read that as "did not find out".
+  const depSteps = facts.dependencies && Array.isArray(facts.dependencies.installSteps) ? facts.dependencies.installSteps.map(String) : [];
   for (const gate of gates) {
     switch (gate) {
       case "rejected":
@@ -251,12 +256,13 @@ export function gateRefusals(gates, facts) {
         break;
       case "install-scripts":
         if (!steps) refusals.push("the record does not say what runs at install, so --fail-on install-scripts cannot pass");
+        else if (!steps.length && depSteps.length) refusals.push(`its dependencies run ${depSteps.length} install step${depSteps.length === 1 ? "" : "s"} (${depSteps.map(sanitize).join(", ")}) and --fail-on install-scripts is set`);
         else if (!steps.length && !nothingRuns) refusals.push(`the check did not find out what runs at install (${sanitize(facts.reasonCode)}), so --fail-on install-scripts cannot pass`);
         else if (steps.length) refusals.push(`it runs ${steps.length} install step${steps.length === 1 ? "" : "s"} (${steps.map(sanitize).join(", ")}) and --fail-on install-scripts is set`);
         break;
       case "network": {
         if (nothingRuns) break; // nothing runs at install, so nothing reached
-        if (steps && steps.length === 0) {
+        if (steps && steps.length === 0 && depSteps.length === 0) {
           refusals.push(`the check did not find out what runs at install (${sanitize(facts.reasonCode)}), so --fail-on network cannot pass`);
           break;
         }

@@ -406,3 +406,18 @@ test("credentials: fails on a decoy read or sent, passes a quiet run, refuses an
   assert.deepEqual(gateRefusals(["credentials"], { checker: "2026-10-08.3", reasonCode: "no_install_steps", installSteps: [] }), [], "nothing runs, so nothing touched");
   assert.match(gateRefusals(["network"], { ...base, observed: { ...quiet, credentialsSent: ["GitHub token in the arguments of wget"] } }).join(), /send a credential/);
 });
+
+// 0.7.0: a package with no install step of its own whose dependency runs one
+// (swagger-ui-express through @scarf/scarf) is gated on what that step did.
+test("a gate reads the dependency tree's install steps", async () => {
+  const { gateRefusals } = await import("../src/check.js");
+  const facts = {
+    verdict: "manual_review", reasonCode: "ran_tried_network", level: "network", installSteps: [],
+    dependencies: { installSteps: ["@scarf/scarf@1.4.0 postinstall"] },
+    observed: { network: [], dns: ["scarf.sh"], truncated: false },
+  };
+  assert.deepEqual(gateRefusals(["network"], facts), ["it tried to reach the network (scarf.sh) and --fail-on network is set"]);
+  assert.match(gateRefusals(["install-scripts"], facts)[0], /its dependencies run 1 install step/);
+  const quiet = { ...facts, reasonCode: "ran_ok", level: "quiet", observed: { network: [], dns: [], truncated: false } };
+  assert.deepEqual(gateRefusals(["network"], quiet), [], "a quiet tree passes the network gate");
+});

@@ -115,3 +115,36 @@ test("--wait asks again until the queued package has a record", async () => {
   assert.equal(code, EXIT.OK);
   assert.equal(sent.length, 2);
 });
+
+// 0.7.0: the tree is checked through the project's direct dependencies, and a
+// package under one comes back covered, answered by that dependency's record.
+test("check-tree sends the direct dependencies, and a covered package does not hold a gate", async () => {
+  const lock = JSON.stringify({
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "app", dependencies: { esbuild: "^0.25.0" }, devDependencies: { lodash: "^4.17.0" } },
+      "node_modules/esbuild": { version: "0.25.0", resolved: REF, integrity: INTEGRITY, hasInstallScript: true },
+      "node_modules/@scarf/scarf": { version: "1.4.0", hasInstallScript: true },
+      "node_modules/lodash": { version: "4.17.21" },
+    },
+  });
+  const dir = mkdtempSync(join(tmpdir(), "kwtree-"));
+  const file = join(dir, "package-lock.json");
+  writeFileSync(file, lock);
+  const answer = {
+    checkedThrough: "direct_dependencies",
+    packages: [
+      { ...signedItem({ verdict: "approved", reasonCode: "ran_ok", level: "quiet", installSteps: ["postinstall"], observed: { network: [], dns: [] } }), direct: true, covers: "esbuild, @scarf/scarf" },
+      { name: "@scarf/scarf", version: "1.4.0", status: "covered", coveredBy: "esbuild@0.25.0" },
+    ],
+  };
+  const { doFetch, sent } = network([answer]);
+  const out = sink(), err = sink();
+  const { code } = await runCheckTree(CONFIG, file, { fetchImpl: doFetch, stdout: out.stream, stderr: err.stream }, { failOn: ["network"] });
+  assert.equal(code, EXIT.OK, err.text);
+  const args = sent[0].params.arguments;
+  assert.deepEqual(args.directs, [{ name: "esbuild", version: "0.25.0" }, { name: "lodash", version: "4.17.21" }]);
+  assert.deepEqual(args.packages.map((/** @type {any} */ p) => p.name).sort(), ["@scarf/scarf", "esbuild"], "only what runs, and the directs, leave the machine");
+  assert.match(out.text, /UNDER\s+@scarf\/scarf@1\.4\.0, run inside esbuild@0\.25\.0/);
+  assert.match(out.text, /Checked through your direct dependencies/);
+});

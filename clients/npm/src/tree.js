@@ -1,9 +1,13 @@
-// Kenwea MCP bridge: `kenwea check-tree [lockfile]` (0.5.0; pnpm and yarn 0.6.0).
+// Kenwea MCP bridge: `kenwea check-tree [lockfile]` (0.5.0; pnpm and yarn 0.6.0;
+// through the direct dependencies 0.7.0).
 //
 // A whole dependency tree in one call. The lockfile is read HERE, and only the
 // packages it says run something at install (hasInstallScript, usually a few
-// percent) are sent to the notary; the names of the rest never leave this
-// machine. Each one comes back with its stored signed record, or queued for a
+// percent) and the project's own direct dependencies (0.7.0, directs.js) are
+// sent to the notary; the names of the rest never leave this machine. The tree
+// is checked through the direct dependencies, so a step runs under the package
+// that pulled it in, as it does in the project; a package under one comes back
+// "covered" and that dependency's record answers for it. Each one comes back with its stored signed record, or queued for a
 // background check. Every record is verified here exactly as `check` verifies
 // one: the signature under the key it names, refusing a revoked key, and the
 // tarball npm installs matched against the lockfile's integrity and the
@@ -11,6 +15,9 @@
 // yet, so a gate cannot pass on it: --wait polls until it has one.
 
 import { readFile, access } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+import { readDirects } from "./directs.js";
 
 import { EXIT, KEYS_URL, gateRefusals, matchTarball, normaliseGates, notaryUrl, rpc, sanitize, extractToolResult, verifyRecord } from "./check.js";
 
@@ -107,6 +114,7 @@ export function readAnyLockfile(text) {
   if (t.startsWith("lockfileVersion:")) {
     const version = unquote(lines[0].slice("lockfileVersion:".length));
     const flags = !version.startsWith("9");
+    /** @type {Array<{name: string, version: string, resolved: string, integrity: string, runs: boolean | undefined}>} */
     const entries = [];
     const seen = new Map();
     let inPackages = false;
@@ -145,6 +153,7 @@ export function readAnyLockfile(text) {
     return { ok: true, format: "pnpm-lock.yaml", entries };
   }
   if (text.includes("# yarn lockfile v1")) {
+    /** @type {Array<{name: string, version: string, resolved: string, integrity: string, runs: boolean | undefined}>} */
     const entries = [];
     const seen = new Set();
     let name = "", ver = "", resolved = "", integrity = "";
@@ -173,6 +182,7 @@ export function readAnyLockfile(text) {
     return { ok: true, format: "yarn.lock", entries };
   }
   if (text.includes("__metadata:")) {
+    /** @type {Array<{name: string, version: string, resolved: string, integrity: string, runs: boolean | undefined}>} */
     const entries = [];
     const seen = new Set();
     for (const line of lines) {
@@ -224,7 +234,7 @@ export async function askRegistry(doFetch, entries, registry = "https://registry
 /**
  * @param {BridgeConfig} config
  * @param {string} path
- * @param {{fetchImpl?: typeof fetch, stdout?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream, sleep?: (ms: number) => Promise<void>}} [io]
+ * @param {{fetchImpl?: typeof fetch, registryFetch?: typeof fetch, stdout?: NodeJS.WritableStream, stderr?: NodeJS.WritableStream, sleep?: (ms: number) => Promise<void>}} [io]
  * @param {{failOn?: string[], json?: boolean, waitSeconds?: number, keysUrl?: string}} [opts]
  * @returns {Promise<{code: number}>}
  */
@@ -265,13 +275,24 @@ export async function runCheckTree(config, path, io = {}, opts = {}) {
     await askRegistry(io.registryFetch ?? doFetch, parsed.entries);
   }
   const unknown = parsed.entries.filter((e) => e.runs === undefined);
-  const lock = { all: parsed.entries.length, runs: parsed.entries.filter((e) => e.runs === true), unknown: unknown.length, format: parsed.format };
+  // A yarn.lock does not say which packages are the project's own; the
+  // package.json beside it does.
+  let packageJson;
+  if (parsed.format === "yarn.lock") {
+    try {
+      packageJson = await readFile(join(dirname(file), "package.json"), "utf8");
+    } catch (e) {
+      /* without it, each package is checked on its own, and that is said */
+    }
+  }
+  const directs = readDirects(text, parsed.format, packageJson);
+  const lock = { all: parsed.entries.length, runs: parsed.entries.filter((e) => e.runs === true), unknown: unknown.length, format: parsed.format, directs: directs.length };
 
   const deadline = Date.now() + Math.max(0, opts.waitSeconds ?? 0) * 1000;
   /** @type {any} */
   let tree = null;
   for (;;) {
-    tree = lock.runs.length ? await askTree(doFetch, config, lock.runs) : { packages: [] };
+    tree = lock.runs.length ? await askTree(doFetch, config, lock.runs, directs) : { packages: [] };
     if (!tree.ok && lock.runs.length) {
       err.write(`[kenwea-mcp] the notary did not answer: ${sanitize(tree.error)}\n`);
       return { code: EXIT.NO_ANSWER };
@@ -283,8 +304,10 @@ export async function runCheckTree(config, path, io = {}, opts = {}) {
   }
 
   // Verify every answered record here, before anything is said or gated on it.
-  const byId = new Map(lock.runs.map((r) => [`${r.name}@${r.version}`, r]));
-  /** @type {Array<{name: string, version: string, status: string, facts?: any, item?: any, error?: string, refusals?: string[]}>} */
+  // Every entry, not only those that run: a direct dependency checked for its
+  // tree is matched against the integrity the lockfile pins for it too.
+  const byId = new Map(parsed.entries.map((r) => [`${r.name}@${r.version}`, r]));
+  /** @type {Array<{name: string, version: string, status: string, facts?: any, item?: any, error?: string, refusals?: string[], coveredBy?: string}>} */
   const rows = [];
   for (const item of tree.packages || []) {
     const row = { name: String(item.name), version: String(item.version), status: String(item.status), item };
@@ -303,13 +326,15 @@ export async function runCheckTree(config, path, io = {}, opts = {}) {
         }
       }
       rows.push({ ...row, facts: checked.facts, refusals: gateRefusals(gates, checked.facts) });
+    } else if (item.status === "covered") {
+      rows.push({ ...row, coveredBy: String(item.coveredBy || "") });
     } else {
       rows.push(row);
     }
   }
 
   if (opts.json) {
-    out.write(JSON.stringify({ lockfile: file, format: lock.format, packages: lock.all, runSomething: lock.runs.length, unknown: lock.unknown, results: rows.map(({ item, ...r }) => r) }) + "\n");
+    out.write(JSON.stringify({ lockfile: file, format: lock.format, packages: lock.all, runSomething: lock.runs.length, unknown: lock.unknown, checkedThrough: tree.checkedThrough || "each_package", results: rows.map(({ item, ...r }) => r) }) + "\n");
   } else {
     out.write(render(file, lock, rows));
   }
@@ -319,7 +344,9 @@ export async function runCheckTree(config, path, io = {}, opts = {}) {
   if (unverified.length) return { code: EXIT.UNVERIFIED };
   if (!gates.length) return { code: EXIT.OK };
   if (lock.unknown) err.write(`[kenwea-mcp] gate: ${lock.unknown} package(s) could not be classified, so --fail-on ${gates.join(",")} cannot pass\n`);
-  const pending = rows.filter((r) => r.status !== "answered");
+  // A covered package is answered by the record of the direct dependency that
+  // covers it, which is a row of its own and is gated as one.
+  const pending = rows.filter((r) => r.status !== "answered" && r.status !== "covered");
   for (const r of pending) err.write(`[kenwea-mcp] gate: ${sanitize(r.name)}@${sanitize(r.version)} has no record yet (${sanitize(r.status)}), so --fail-on ${gates.join(",")} cannot pass; try --wait 600\n`);
   const refused = rows.filter((r) => r.refusals && r.refusals.length);
   for (const r of refused) for (const why of r.refusals || []) err.write(`[kenwea-mcp] gate: ${sanitize(r.name)}@${sanitize(r.version)}: ${why}\n`);
@@ -332,15 +359,22 @@ export async function runCheckTree(config, path, io = {}, opts = {}) {
  * @param {typeof fetch} doFetch
  * @param {BridgeConfig} config
  * @param {Array<{name: string, version: string}>} runs
+ * @param {Array<{name: string, version: string}>} [directs]
  */
-async function askTree(doFetch, config, runs) {
+async function askTree(doFetch, config, runs, directs = []) {
   const active = { ...config, url: notaryUrl(config.url) };
   const session = { sessionId: null };
   const res = await rpc(doFetch, active, session, {
     jsonrpc: "2.0",
     id: "check-tree",
     method: "tools/call",
-    params: { name: "kenwea_notary_check_tree", arguments: { packages: runs.map((r) => ({ name: r.name, version: r.version, hasInstallScript: true })) } },
+    params: {
+      name: "kenwea_notary_check_tree",
+      arguments: {
+        packages: runs.map((r) => ({ name: r.name, version: r.version, hasInstallScript: true })),
+        ...(directs.length ? { directs: directs.map((d) => ({ name: d.name, version: d.version })) } : {}),
+      },
+    },
   }, 60_000);
   if (!res.ok) return { ok: false, error: res.error || `HTTP ${res.status}` };
   const result = extractToolResult(res.body);
@@ -351,15 +385,19 @@ async function askTree(doFetch, config, runs) {
   return { ok: true, ...result };
 }
 
-/** @param {string} file @param {{all: number, runs: any[], unknown?: number, format?: string}} lock @param {any[]} rows */
+/** @param {string} file @param {{all: number, runs: any[], unknown?: number, format?: string, directs?: number}} lock @param {any[]} rows */
 function render(file, lock, rows) {
   const answered = rows.filter((r) => r.facts);
   const queued = rows.filter((r) => r.status === "queued" || r.status === "not_queued");
+  const covered = rows.filter((r) => r.status === "covered");
   const lines = [`Kenwea notary: ${sanitize(file)}`, ""];
   const said = lock.format === "package-lock.json" ? "your lockfile says so" : "your lockfile or, where it does not say, the npm registry, asked from here";
-  lines.push(`  ${lock.all} packages; ${lock.all - lock.runs.length - (lock.unknown || 0)} run nothing of their own at install (${said}; their names did not go to Kenwea).`);
+  lines.push(`  ${lock.all} packages; ${lock.all - lock.runs.length - (lock.unknown || 0)} run nothing of their own at install (${said}; their names did not go to Kenwea, except your direct dependencies').`);
   if (lock.unknown) lines.push(`  ${lock.unknown} could not be asked of the registry in time and are not checked.`);
-  lines.push(`  ${lock.runs.length} run something: ${answered.length} with a verified signed record, ${queued.length} not checked yet.`, "");
+  lines.push(`  ${lock.runs.length} run something. ${answered.length} record(s) verified, ${queued.length} not checked yet.`);
+  if (lock.directs) lines.push("  Checked through your direct dependencies, each with its whole tree, so a step runs under the package that pulled it in.");
+  else lines.push("  The lockfile does not say which packages are your own, so each was checked on its own; a step that acts only under its parent can look quiet.");
+  lines.push("");
   const order = { sends_credentials: 0, reads_credentials: 1, network: 2, unfinished: 3, quiet: 4, nothing_runs: 5 };
   answered.sort((a, b) => ((/** @type {any} */ (order))[a.facts.level] ?? 3) - ((/** @type {any} */ (order))[b.facts.level] ?? 3));
   for (const r of answered) {
@@ -367,6 +405,7 @@ function render(file, lock, rows) {
     lines.push(`  ${level.padEnd(18)} ${sanitize(r.name)}@${sanitize(r.version)}`);
     if (r.item && r.item.summary && r.facts.level !== "quiet") lines.push(`  ${" ".repeat(18)} ${sanitize(r.item.summary)}`);
   }
+  for (const r of covered) lines.push(`  ${"UNDER".padEnd(18)} ${sanitize(r.name)}@${sanitize(r.version)}, run inside ${sanitize(r.item && r.item.coveredBy)}`);
   for (const r of queued) lines.push(`  ${"QUEUED".padEnd(18)} ${sanitize(r.name)}@${sanitize(r.version)}`);
   for (const r of rows.filter((x) => x.status === "unverified")) lines.push(`  ${"NOT VERIFIED".padEnd(18)} ${sanitize(r.name)}@${sanitize(r.version)}`);
   if (queued.length) lines.push("", "  Queued packages are checked in the background, about two a minute. Run again later, or add --wait 600.");
