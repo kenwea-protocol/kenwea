@@ -5,7 +5,8 @@
 // it, and alone it sends nothing. So the notary checks a tree through its direct
 // dependencies, each with its whole tree, and the packages under one are
 // answered by its record. This reads which those are: the root of a
-// package-lock.json, the "." importer of a pnpm-lock.yaml (or v5's top level),
+// package-lock.json, every importer of a pnpm-lock.yaml (each workspace package
+// is a project of its own; 0.7.1) or v5's top level,
 // and for a yarn.lock, which does not say, the package.json beside it matched
 // against the lockfile's entries. Their names and versions go to the notary
 // with the packages that run something.
@@ -91,7 +92,7 @@ function pnpmDirects(text) {
       inRoot = !!group;
       name = "";
     } else if (section === "importers" && indent === 2) {
-      inRoot = key === ".";
+      inRoot = true;
       group = name = "";
     } else if (section === "importers" && inRoot && indent === 4) {
       group = groups.has(key) ? key : "";
