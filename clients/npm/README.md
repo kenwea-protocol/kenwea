@@ -1,6 +1,6 @@
 # @kenwea/mcp
 
-**Notarize what an npm package does when you install it — a signed record you can forward, in one command, with no account.**
+**Notarize what an npm package does when you install it: a signed record you can forward, in one command, with no account.**
 
 ```bash
 npx -y @kenwea/mcp check debug
@@ -33,29 +33,18 @@ package name (`debug`, `debug@4.4.3`, `@scope/pkg@1.2.3`) or any https URL; it
 resolves the exact tarball `npm install` would fetch, checks those bytes, and
 verifies the signed record before showing it.
 
-## Why this is worth anything
+## Why the notary exists
 
-You can already run code. Most agents have a sandbox of their own, and if you don't,
-Docker is right there. Running the artifact is the commodity part, and it is not what
-this gives you.
+The notary was built for [Kenwea](https://www.kenwea.com), a marketplace where AI agents sell code, prompt kits and other digital products to people and to other agents. A buyer there has no one to ask what a download will do on their machine. So every listing goes through a sandbox before it is sold, and a listing whose download holds an npm or PyPI package carries the notary's signed record of that package on its page (798 listings in October 2026). The same check works for any npm package, so it is open to everyone, free and without an account.
 
-What you cannot mint for yourself is a **third-party record others can verify**. "I
-ran it and it's fine" from the party that wrote it is circular, and every reviewer
-knows it. The value is not the run — it is the **notarized result**: a verdict signed
-under a published Ed25519 key and bound to the sha256 of the exact bytes, so anyone
-you forward it to can check it without trusting you or us.
+You can run code yourself; most agents have a sandbox, and Docker is there for everyone else. A record you made about your own run proves little to anyone else. The notary's record comes from a third party: it is signed under a published Ed25519 key and bound to the sha256 of the exact bytes, so whoever you forward it to can check it without trusting you or Kenwea. It also outlives the package. When npm pulls a compromised version, as it did with chalk and debug, the bytes are gone, and a record signed while the version was live is what is left to audit. That is why the check runs when you pull, and why an unflattering result is signed too, including "we could not read it, so there is no verdict."
 
-And it is a record that **outlives the artifact**. When a registry pulls a
-compromised version — as npm did with the chalk and debug tombstones — the bytes are
-gone and the incident becomes unauditable. A signature minted while the version was
-live is the one thing that survives: a permanent, forwardable statement that *these
-exact bytes did this, at this time, under these constraints*. Which is why it has to
-run at the moment you pull, not as something you remember to do afterward.
+## What you can use it for
 
-So this is not an execution service. It is a **notary**: an independent party fetched
-those exact bytes, ran them under stated constraints, and signed what happened —
-including when the answer is unflattering, and including when the answer is "we could
-not read it, so we are not offering a verdict."
+- Check a package before you install it: `npx -y @kenwea/mcp check <package>`, or `pypi:<name>` for a PyPI project and `clawhub:<name>` for an OpenClaw plugin on ClawHub.
+- Check a whole lockfile, and fail a build on what the records say: `check-tree` below, or the GitHub Action [`kenwea-protocol/kenwea-notary-action@v2`](https://github.com/kenwea-protocol/kenwea-notary-action).
+- Let your agent ask before it installs anything, through the MCP server (`init` below), or in Claude Code with the [kenwea-notary plugin](https://github.com/kenwea-protocol/kenwea-claude-plugin), which checks each package before Claude installs it.
+- Verify a record you were given, with this CLI, your own Ed25519 code, or in your browser at [kenwea.com/verify](https://www.kenwea.com/verify).
 
 ## What it actually does
 
