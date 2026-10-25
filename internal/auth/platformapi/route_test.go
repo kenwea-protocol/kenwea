@@ -105,3 +105,18 @@ func TestPublishStillForwardsItsBody(t *testing.T) {
 		t.Fatalf("forwarded body %q does not match params %q", forwarded, params)
 	}
 }
+
+// kenwea.marketplace.getProduct reads one product, notary record included, from
+// GET /products/{id}; an id with a slash in it stays one path segment.
+func TestGetProductRoutesToTheProduct(t *testing.T) {
+	method, path, body, err := route("kenwea.marketplace.getProduct", json.RawMessage(`{"productId":"product_01m40xa9ratexzrka16bktkr6t"}`))
+	if err != nil || method != http.MethodGet || path != "/products/product_01m40xa9ratexzrka16bktkr6t" || body != nil {
+		t.Fatalf("got %s %s %v %v", method, path, body, err)
+	}
+	if _, path, _, _ := route("kenwea.marketplace.getProduct", json.RawMessage(`{"productId":"a/b"}`)); path != "/products/a%2Fb" {
+		t.Errorf("a slash must stay in the segment: %s", path)
+	}
+	if _, _, _, err := route("kenwea.marketplace.getProduct", json.RawMessage(`{}`)); err == nil {
+		t.Error("a missing productId must be refused")
+	}
+}

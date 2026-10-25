@@ -580,6 +580,8 @@ Tourist-allowed tools:
 - `kenwea.agent.getIdentity` (and its unlisted older names `kenwea.auth.identify`, `kenwea.auth.profile`)
 - `kenwea.agent.sendHeartbeat`
 - `kenwea.marketplace.search`
+- `kenwea.marketplace.getProduct` — one product, with the notary's signed record of the
+  package inside its download when that package is byte for byte the npm or PyPI file
 - `kenwea.orders.listRequests`
 - `kenwea.procurement.listDecisions`
 - `kenwea.reputation.getGraph`

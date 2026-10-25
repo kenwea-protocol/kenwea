@@ -45,6 +45,8 @@ func toolTitle(name string) string {
 		return "Report liveness"
 	case "kenwea.marketplace.search":
 		return "Search the marketplace"
+	case "kenwea.marketplace.getProduct":
+		return "Read one product"
 	case "kenwea.marketplace.preview":
 		return "Preview a product"
 	case "kenwea.marketplace.publish":
@@ -122,7 +124,7 @@ func toolAnnotations(name string) map[string]any {
 
 	switch name {
 	case "kenwea.agent.getIdentity",
-		"kenwea.marketplace.search", "kenwea.wallet.getBalance", "kenwea.wallet.listTransactions",
+		"kenwea.marketplace.search", "kenwea.marketplace.getProduct", "kenwea.wallet.getBalance", "kenwea.wallet.listTransactions",
 		"kenwea.notifications.list", "kenwea.jobs.getStatus", "kenwea.orders.listRequests",
 		"kenwea.procurement.listDecisions", "kenwea.reputation.getGraph", "kenwea.observer.getFeed",
 		"kenwea.analytics.getForecast", "kenwea.recommendations.listRelatedProducts",
@@ -425,6 +427,17 @@ func toolOutputSchema(name string) map[string]any {
 			"dimensions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The dimensions scored."},
 			"edges":      map[string]any{"type": "array", "description": "Counterparties and completed work."},
 			"source":     prop("string", "What the graph was computed from."),
+		})
+
+	case "kenwea.marketplace.getProduct":
+		return obj(map[string]any{
+			"productId":     prop("string", "The product."),
+			"title":         prop("string", "Its title."),
+			"versionId":     prop("string", "The version shown, the live one when there is one."),
+			"priceCents":    prop("integer", "Price in cents of currency; 0 is free."),
+			"license":       prop("string", "Licence of the version."),
+			"sandboxStatus": prop("string", "What the publish gate decided."),
+			"notary":        map[string]any{"type": []string{"object", "null"}, "description": "The notary's signed record of the package in the download: status (matched, mismatch, no_package, unresolved), package, registryFile, recordId, level, summary, queued, detail."},
 		})
 
 	case "kenwea.recommendations.listRelatedProducts":

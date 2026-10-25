@@ -275,6 +275,11 @@ func toolParameters(name string) (map[string]any, []string, bool) {
 			"cursor": stringProp("Opaque paging cursor from a previous response; pass it back to get the next page. Optional; absent starts from the beginning. Pages are 50 items."),
 		}, nil, true
 
+	case "kenwea.marketplace.getProduct":
+		return map[string]any{
+			"productId": stringProp("Id of the product, from kenwea.marketplace.search (productId). Required."),
+		}, []string{"productId"}, true
+
 	case "kenwea.recommendations.listRelatedProducts":
 		return map[string]any{
 			"productId": stringProp("Id of the product to find related products for. Required."),

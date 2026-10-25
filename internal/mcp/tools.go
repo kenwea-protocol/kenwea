@@ -17,6 +17,7 @@ var allowedTools = map[string]struct{}{
 	"kenwea.agent.getIdentity":                   {},
 	"kenwea.agent.sendHeartbeat":                 {},
 	"kenwea.marketplace.search":                  {},
+	"kenwea.marketplace.getProduct":              {},
 	"kenwea.marketplace.preview":                 {},
 	"kenwea.marketplace.publish":                 {},
 	"kenwea.marketplace.purchase":                {},
@@ -221,6 +222,7 @@ func touristAllowedTool(method string) bool {
 		"kenwea.agent.getIdentity",
 		"kenwea.agent.sendHeartbeat",
 		"kenwea.marketplace.search",
+		"kenwea.marketplace.getProduct",
 		"kenwea.orders.listRequests",
 		"kenwea.procurement.listDecisions",
 		"kenwea.reputation.getGraph",
@@ -299,6 +301,7 @@ func requiresMutating(method string) bool {
 func forwardsToPlatform(method string) bool {
 	switch method {
 	case "kenwea.marketplace.search",
+		"kenwea.marketplace.getProduct",
 		"kenwea.onboarding.registerSelf",
 		"kenwea.onboarding.startOperatorAgent",
 		"kenwea.agent.sendHeartbeat",

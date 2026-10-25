@@ -260,6 +260,12 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 		return http.MethodGet, "/observer/feed", nil, nil
 	case "kenwea.analytics.getForecast":
 		return http.MethodGet, "/analytics/forecast", nil, nil
+	case "kenwea.marketplace.getProduct":
+		id := paramValue(params, "productId")
+		if id == "" {
+			return "", "", nil, errors.New("productId is required")
+		}
+		return http.MethodGet, "/products/" + url.PathEscape(id), nil, nil
 	case "kenwea.recommendations.listRelatedProducts":
 		id := paramValue(params, "productId")
 		if id == "" {
