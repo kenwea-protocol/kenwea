@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+  # A change to the witness runs it at once, so a broken one shows.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/notary-log-witness.yml
+      - cmd/notary-log-witness/**
 permissions:
   contents: write
 concurrency:
