@@ -1,0 +1,21 @@
+{
+  "issuer": "kenwea.com",
+  "about": "Every Ed25519 key Kenwea has signed notary records with. A record names its key in keyId. Treat a record signed with a revoked key as unsigned.",
+  "keys": [
+    {
+      "keyId": "322a2536e0d5ec8e",
+      "algorithm": "ed25519",
+      "publicKeyBase64": "HViwSxydRCtzGNpfUQ+Q1zM7Cc4M4li/rlJ2VU8DZmU=",
+      "status": "active",
+      "since": "2026-10-08"
+    },
+    {
+      "keyId": "00f55dd04da212b3",
+      "algorithm": "ed25519",
+      "publicKeyBase64": "0s/04nzmbnMj61f0kWeQLqVyOc82Zi+Q5qiI0rWAzZo=",
+      "status": "revoked",
+      "revokedAt": "2026-10-08",
+      "reason": "the private seed was kept in a cloud-synced folder, so it cannot be shown never to have been copied"
+    }
+  ]
+}
