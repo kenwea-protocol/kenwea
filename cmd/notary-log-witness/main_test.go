@@ -27,7 +27,7 @@ type fakeLog struct {
 	signed *time.Time // set: the checkpoint names this signing time
 }
 
-var old = limits{stale: 72 * time.Hour, fresh: 3 * time.Hour}
+var old = limits{stale: 72 * time.Hour, fresh: 3 * time.Hour, every: 55 * time.Minute}
 
 func (l *fakeLog) ReadHashes(indexes []int64) ([]tlog.Hash, error) {
 	out := make([]tlog.Hash, len(indexes))
@@ -176,6 +176,14 @@ func TestWitnessChecksTheSignedTime(t *testing.T) {
 	if msg, err := run(srv.Client(), srv.URL, dir, old, later); err != nil || !strings.HasPrefix(msg, "unchanged at 4 records, signed ") {
 		t.Fatalf("quiet, fresh: %q %v", msg, err)
 	}
+	// Tried again 15 minutes later: nothing new is kept until -every has passed.
+	soon := later.Add(15 * time.Minute)
+	at3 := soon.Add(-time.Minute)
+	l.signed = &at3
+	if msg, err := run(srv.Client(), srv.URL, dir, old, soon); err != nil || !strings.Contains(msg, "last kept "+later.Format(time.RFC3339)) {
+		t.Fatalf("too soon to keep: %q %v", msg, err)
+	}
+	l.signed = &at2
 	// A head signed hours ago, served now: the log is frozen.
 	if _, err := run(srv.Client(), srv.URL, dir, old, later.Add(4*time.Hour)); err == nil || !strings.Contains(err.Error(), "old head") {
 		t.Fatalf("frozen head: %v", err)

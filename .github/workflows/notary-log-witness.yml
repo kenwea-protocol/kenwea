@@ -1,4 +1,6 @@
-# Keeps an outside copy of the notary's transparency log head, every hour.
+# Keeps an outside copy of the notary's transparency log head. GitHub drops
+# scheduled runs under load, so it tries every 15 minutes and keeps an
+# unchanged head at most once an hour.
 # cmd/notary-log-witness checks the head's signature against the pinned key and
 # that it extends the last head kept; a run that fails keeps nothing. The heads
 # are kept on the notary-log branch, so every head the log has shown is in git
@@ -6,7 +8,7 @@
 name: notary log witness
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
   # A change to the witness runs it at once, so a broken one shows.
   push:

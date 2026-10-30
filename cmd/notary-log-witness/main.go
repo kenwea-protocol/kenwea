@@ -18,8 +18,9 @@
 // A checkpoint names the time it was signed on an extension line, "time
 // <RFC 3339>". The run fails when that time is older than -fresh, ahead of the
 // clock, or earlier than the last head kept: a frozen log keeps serving an old
-// head. Every run that passes is kept, so the branch's last commit says when
-// the witness last looked. A checkpoint without the line falls back to the old
+// head. A run that passes is kept when the head grew, or when the last one
+// kept is older than -every, so the branch's last commit says when the witness
+// last looked. A checkpoint without the line falls back to the old
 // rule: fail when the log has not grown for longer than -stale.
 package main
 
@@ -52,8 +53,9 @@ func main() {
 	dir := flag.String("dir", "notary/log", "where the verifier key, the last checkpoint and the witness log are kept")
 	stale := flag.Duration("stale", 72*time.Hour, "for a checkpoint that names no time: fail when the log has not grown for longer than this")
 	fresh := flag.Duration("fresh", 3*time.Hour, "fail when the checkpoint was signed longer ago than this")
+	every := flag.Duration("every", 55*time.Minute, "keep an unchanged head at most this often")
 	flag.Parse()
-	msg, err := run(&http.Client{Timeout: 30 * time.Second}, *api, *dir, limits{stale: *stale, fresh: *fresh}, time.Now().UTC())
+	msg, err := run(&http.Client{Timeout: 30 * time.Second}, *api, *dir, limits{stale: *stale, fresh: *fresh, every: *every}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "notary-log-witness:", err)
 		os.Exit(1)
@@ -61,7 +63,7 @@ func main() {
 	fmt.Println(msg)
 }
 
-type limits struct{ stale, fresh time.Duration }
+type limits struct{ stale, fresh, every time.Duration }
 
 func run(client *http.Client, api, dir string, lim limits, now time.Time) (string, error) {
 	key, err := os.ReadFile(filepath.Join(dir, "verifier.txt"))
@@ -110,6 +112,16 @@ func run(client *http.Client, api, dir string, lim limits, now time.Time) (strin
 	case cur.size == prev.size && cur.root != prev.root:
 		return "", fmt.Errorf("the log changed its root at %d records without growing", cur.size)
 	case cur.size == prev.size && !cur.signedAt.IsZero():
+		// The schedule tries every 15 minutes because GitHub drops scheduled
+		// runs under load; an unchanged head is kept at most once per -every,
+		// so the branch still says hourly that the witness is alive.
+		kept, err := lastGrowth(logPath)
+		if err != nil {
+			return "", err
+		}
+		if !kept.IsZero() && now.Sub(kept) < lim.every {
+			return fmt.Sprintf("unchanged at %d records, signed %s; last kept %s", cur.size, cur.signedAt.Format(time.RFC3339), kept.Format(time.RFC3339)), nil
+		}
 		return keep(path, logPath, text, cur, now, fmt.Sprintf("unchanged at %d records, signed %s", cur.size, cur.signedAt.Format(time.RFC3339)))
 	case cur.size == prev.size:
 		grew, err := lastGrowth(logPath)
