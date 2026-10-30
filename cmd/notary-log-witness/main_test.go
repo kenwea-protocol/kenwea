@@ -24,7 +24,10 @@ type fakeLog struct {
 	hashes []tlog.Hash
 	size   int64
 	root   *tlog.Hash // set: the checkpoint lies about its root
+	signed *time.Time // set: the checkpoint names this signing time
 }
+
+var old = limits{stale: 72 * time.Hour, fresh: 3 * time.Hour}
 
 func (l *fakeLog) ReadHashes(indexes []int64) ([]tlog.Hash, error) {
 	out := make([]tlog.Hash, len(indexes))
@@ -52,7 +55,11 @@ func (l *fakeLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if l.root != nil {
 			root = *l.root
 		}
-		signed, _ := note.Sign(&note.Note{Text: fmt.Sprintf("kenwea.com/notary-log\n%d\n%s\n", l.size, base64.StdEncoding.EncodeToString(root[:]))}, l.signer)
+		text := fmt.Sprintf("kenwea.com/notary-log\n%d\n%s\n", l.size, base64.StdEncoding.EncodeToString(root[:]))
+		if l.signed != nil {
+			text += "time " + l.signed.Format(time.RFC3339) + "\n"
+		}
+		signed, _ := note.Sign(&note.Note{Text: text}, l.signer)
 		w.Write(signed)
 	case "/public/notary/log/consistency":
 		old, _ := strconv.ParseInt(r.URL.Query().Get("old"), 10, 64)
@@ -89,14 +96,14 @@ func TestWitnessKeepsAGrowingLog(t *testing.T) {
 	l, srv, dir := setup(t)
 	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
 	l.grow(t, 7)
-	if msg, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now); err != nil || msg != "first head kept" {
+	if msg, err := run(srv.Client(), srv.URL, dir, old, now); err != nil || msg != "first head kept" {
 		t.Fatalf("first run: %q %v", msg, err)
 	}
-	if msg, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(time.Hour)); err != nil || !strings.HasPrefix(msg, "unchanged") {
+	if msg, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err != nil || !strings.HasPrefix(msg, "unchanged") {
 		t.Fatalf("unchanged run: %q %v", msg, err)
 	}
 	l.grow(t, 23)
-	if msg, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(2*time.Hour)); err != nil || msg != "grew from 7 to 23 records, consistent" {
+	if msg, err := run(srv.Client(), srv.URL, dir, old, now.Add(2*time.Hour)); err != nil || msg != "grew from 7 to 23 records, consistent" {
 		t.Fatalf("growth run: %q %v", msg, err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "witness.log"))
@@ -109,7 +116,7 @@ func TestWitnessRefusesAHeadThatDoesNotExtendTheLastOne(t *testing.T) {
 	l, srv, dir := setup(t)
 	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
 	l.grow(t, 7)
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now); err != nil {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now); err != nil {
 		t.Fatal(err)
 	}
 	kept, _ := os.ReadFile(filepath.Join(dir, "checkpoint.txt"))
@@ -117,7 +124,7 @@ func TestWitnessRefusesAHeadThatDoesNotExtendTheLastOne(t *testing.T) {
 	l.grow(t, 9)
 	forged := tlog.Hash{1}
 	l.root = &forged // a signed head whose tree does not contain the kept one
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "does not contain") {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "does not contain") {
 		t.Fatalf("forked head: %v", err)
 	}
 	if now, _ := os.ReadFile(filepath.Join(dir, "checkpoint.txt")); string(now) != string(kept) {
@@ -125,12 +132,12 @@ func TestWitnessRefusesAHeadThatDoesNotExtendTheLastOne(t *testing.T) {
 	}
 
 	l.root, l.size = nil, 5
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "shrank") {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "shrank") {
 		t.Fatalf("shrunk log: %v", err)
 	}
 	l.size = 7
 	l.root = &forged
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "without growing") {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "without growing") {
 		t.Fatalf("same size, other root: %v", err)
 	}
 }
@@ -139,16 +146,52 @@ func TestWitnessFailsAFrozenLogAndAnotherKey(t *testing.T) {
 	l, srv, dir := setup(t)
 	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
 	l.grow(t, 3)
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now); err != nil {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(73*time.Hour)); err == nil || !strings.Contains(err.Error(), "longer than") {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(73*time.Hour)); err == nil || !strings.Contains(err.Error(), "longer than") {
 		t.Fatalf("frozen log: %v", err)
 	}
 
 	skey, _, _ := note.GenerateKey(rand.Reader, "kenwea.com/notary-log")
 	l.signer, _ = note.NewSigner(skey) // same name, a key the witness did not pin
-	if _, err := run(srv.Client(), srv.URL, dir, 72*time.Hour, now.Add(time.Hour)); err == nil {
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err == nil {
 		t.Fatal("a checkpoint under another key was accepted")
+	}
+}
+
+func TestWitnessChecksTheSignedTime(t *testing.T) {
+	l, srv, dir := setup(t)
+	now := time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)
+	at := now.Add(-time.Minute)
+	l.signed = &at
+	l.grow(t, 4)
+	if _, err := run(srv.Client(), srv.URL, dir, old, now); err != nil {
+		t.Fatal(err)
+	}
+	// A quiet log is fine while its head is freshly signed, long past -stale.
+	later := now.Add(100 * time.Hour)
+	at2 := later.Add(-time.Minute)
+	l.signed = &at2
+	if msg, err := run(srv.Client(), srv.URL, dir, old, later); err != nil || !strings.HasPrefix(msg, "unchanged at 4 records, signed ") {
+		t.Fatalf("quiet, fresh: %q %v", msg, err)
+	}
+	// A head signed hours ago, served now: the log is frozen.
+	if _, err := run(srv.Client(), srv.URL, dir, old, later.Add(4*time.Hour)); err == nil || !strings.Contains(err.Error(), "old head") {
+		t.Fatalf("frozen head: %v", err)
+	}
+	// Signed before the head already kept.
+	l.signed = &at
+	if _, err := run(srv.Client(), srv.URL, dir, old, now.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "before the one kept") {
+		t.Fatalf("backwards time: %v", err)
+	}
+	ahead := later.Add(time.Hour)
+	l.signed = &ahead
+	if _, err := run(srv.Client(), srv.URL, dir, old, later); err == nil || !strings.Contains(err.Error(), "ahead of the clock") {
+		t.Fatalf("future time: %v", err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "witness.log"))
+	if lines := strings.Split(strings.TrimSpace(string(raw)), "\n"); len(lines) != 2 || !strings.HasSuffix(lines[1], " signed "+at2.Format(time.RFC3339)) {
+		t.Fatalf("witness log: %q", raw)
 	}
 }

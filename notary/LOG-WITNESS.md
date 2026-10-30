@@ -4,7 +4,7 @@ Every record the notary keeps is appended to a Merkle transparency log. The log'
 
     https://api.kenwea.com/public/notary/log/checkpoint?format=note
 
-A checkpoint carries no time, and until 30 October 2026 nobody outside Kenwea kept one. A log frozen at an old head, or one showing different heads to different readers, would have looked like a quiet one.
+Until 30 October 2026 a checkpoint carried no time and nobody outside Kenwea kept one, so a log frozen at an old head, or one showing different heads to different readers, would have looked like a quiet one. Since that evening every checkpoint ends with an extension line, time followed by the RFC 3339 moment it was signed, under the same signature. Readers of the first three lines are unaffected.
 
 This repository now keeps them. Every hour the `notary log witness` workflow runs `cmd/notary-log-witness`, which
 
@@ -12,7 +12,7 @@ This repository now keeps them. Every hour the `notary log witness` workflow run
 2. checks with the log's consistency proof that it extends the last head kept; a head that shrank, changed without growing, or does not contain the last one fails the run, and nothing is kept,
 3. keeps it in `notary/log/checkpoint.txt` and adds a line (time, size, root) to `notary/log/witness.log`, committed to the `notary-log` branch.
 
-The run also fails when the log has not grown for 72 hours, since the notary records checks every day.
+The run also fails when the checkpoint was signed more than 3 hours before the run, says a time ahead of the clock, or was signed before the head already kept: a frozen log keeps serving an old head. A quiet log whose head is freshly signed passes. Every run that passes is committed, so the branch's last commit says when the witness last looked; if it is hours old, the witness itself has stopped. (A checkpoint without the time line falls back to the earlier rule: fail when the log has not grown for 72 hours.)
 
 What this gives you: a time bound. A record whose log index is below the size of a head committed here at time T was in the log by T, and git history, with GitHub's times, is not something we can quietly rewrite. Compare the checkpoint the API gives you with the latest one here; if they disagree, or the latest commit is old, do not trust the log.
 

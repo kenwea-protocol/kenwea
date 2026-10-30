@@ -15,8 +15,12 @@
 //  3. keep it in notary/log/checkpoint.txt and add a line to witness.log, so
 //     every head the log has shown is in git history with GitHub's own times.
 //
-// It also fails when the log has not grown for longer than -stale, since the
-// notary records checks every day.
+// A checkpoint names the time it was signed on an extension line, "time
+// <RFC 3339>". The run fails when that time is older than -fresh, ahead of the
+// clock, or earlier than the last head kept: a frozen log keeps serving an old
+// head. Every run that passes is kept, so the branch's last commit says when
+// the witness last looked. A checkpoint without the line falls back to the old
+// rule: fail when the log has not grown for longer than -stale.
 package main
 
 import (
@@ -38,16 +42,18 @@ import (
 )
 
 type head struct {
-	size int64
-	root tlog.Hash
+	size     int64
+	root     tlog.Hash
+	signedAt time.Time // zero: the checkpoint names no time
 }
 
 func main() {
 	api := flag.String("api", "https://api.kenwea.com", "the notary API")
 	dir := flag.String("dir", "notary/log", "where the verifier key, the last checkpoint and the witness log are kept")
-	stale := flag.Duration("stale", 72*time.Hour, "fail when the log has not grown for longer than this")
+	stale := flag.Duration("stale", 72*time.Hour, "for a checkpoint that names no time: fail when the log has not grown for longer than this")
+	fresh := flag.Duration("fresh", 3*time.Hour, "fail when the checkpoint was signed longer ago than this")
 	flag.Parse()
-	msg, err := run(&http.Client{Timeout: 30 * time.Second}, *api, *dir, *stale, time.Now().UTC())
+	msg, err := run(&http.Client{Timeout: 30 * time.Second}, *api, *dir, limits{stale: *stale, fresh: *fresh}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "notary-log-witness:", err)
 		os.Exit(1)
@@ -55,7 +61,9 @@ func main() {
 	fmt.Println(msg)
 }
 
-func run(client *http.Client, api, dir string, stale time.Duration, now time.Time) (string, error) {
+type limits struct{ stale, fresh time.Duration }
+
+func run(client *http.Client, api, dir string, lim limits, now time.Time) (string, error) {
 	key, err := os.ReadFile(filepath.Join(dir, "verifier.txt"))
 	if err != nil {
 		return "", fmt.Errorf("pinned verifier key: %w", err)
@@ -72,6 +80,14 @@ func run(client *http.Client, api, dir string, stale time.Duration, now time.Tim
 	if err != nil {
 		return "", fmt.Errorf("current checkpoint: %w", err)
 	}
+	if !cur.signedAt.IsZero() {
+		switch {
+		case cur.signedAt.After(now.Add(10 * time.Minute)):
+			return "", fmt.Errorf("the checkpoint says it was signed at %s, ahead of the clock", cur.signedAt.Format(time.RFC3339))
+		case now.Sub(cur.signedAt) > lim.fresh:
+			return "", fmt.Errorf("the checkpoint was signed at %s, longer ago than %s: the log is serving an old head", cur.signedAt.Format(time.RFC3339), lim.fresh)
+		}
+	}
 	path := filepath.Join(dir, "checkpoint.txt")
 	logPath := filepath.Join(dir, "witness.log")
 	last, err := os.ReadFile(path)
@@ -85,18 +101,23 @@ func run(client *http.Client, api, dir string, stale time.Duration, now time.Tim
 	if err != nil {
 		return "", fmt.Errorf("kept checkpoint: %w", err)
 	}
+	if !prev.signedAt.IsZero() && cur.signedAt.Before(prev.signedAt) {
+		return "", fmt.Errorf("the checkpoint was signed at %s, before the one kept (%s)", cur.signedAt.Format(time.RFC3339), prev.signedAt.Format(time.RFC3339))
+	}
 	switch {
 	case cur.size < prev.size:
 		return "", fmt.Errorf("the log shrank from %d to %d records", prev.size, cur.size)
 	case cur.size == prev.size && cur.root != prev.root:
 		return "", fmt.Errorf("the log changed its root at %d records without growing", cur.size)
+	case cur.size == prev.size && !cur.signedAt.IsZero():
+		return keep(path, logPath, text, cur, now, fmt.Sprintf("unchanged at %d records, signed %s", cur.size, cur.signedAt.Format(time.RFC3339)))
 	case cur.size == prev.size:
 		grew, err := lastGrowth(logPath)
 		if err != nil {
 			return "", err
 		}
-		if !grew.IsZero() && now.Sub(grew) > stale {
-			return "", fmt.Errorf("the log has held %d records since %s, longer than %s", cur.size, grew.Format(time.RFC3339), stale)
+		if !grew.IsZero() && now.Sub(grew) > lim.stale {
+			return "", fmt.Errorf("the log has held %d records since %s, longer than %s", cur.size, grew.Format(time.RFC3339), lim.stale)
 		}
 		return fmt.Sprintf("unchanged at %d records", cur.size), nil
 	}
@@ -147,6 +168,13 @@ func openCheckpoint(text []byte, verifier note.Verifier) (head, error) {
 	}
 	h := head{size: size}
 	copy(h.root[:], b)
+	for _, line := range lines[3:] {
+		if v, ok := strings.CutPrefix(line, "time "); ok {
+			if h.signedAt, err = time.Parse(time.RFC3339, v); err != nil {
+				return head{}, fmt.Errorf("time %q", v)
+			}
+		}
+	}
 	return h, nil
 }
 
@@ -159,13 +187,18 @@ func keep(path, logPath string, text []byte, h head, now time.Time, msg string) 
 		return "", err
 	}
 	defer f.Close()
-	if _, err := fmt.Fprintf(f, "%s %d %s\n", now.Format(time.RFC3339), h.size, base64.StdEncoding.EncodeToString(h.root[:])); err != nil {
+	line := fmt.Sprintf("%s %d %s", now.Format(time.RFC3339), h.size, base64.StdEncoding.EncodeToString(h.root[:]))
+	if !h.signedAt.IsZero() {
+		line += " signed " + h.signedAt.Format(time.RFC3339)
+	}
+	if _, err := fmt.Fprintln(f, line); err != nil {
 		return "", err
 	}
 	return msg, nil
 }
 
-// lastGrowth is the time on the witness log's last line: the last head kept.
+// lastGrowth is the time on the witness log's last line: the last head kept,
+// which for checkpoints that name no time is the last time the log grew.
 func lastGrowth(logPath string) (time.Time, error) {
 	raw, err := os.ReadFile(logPath)
 	if errors.Is(err, os.ErrNotExist) {
