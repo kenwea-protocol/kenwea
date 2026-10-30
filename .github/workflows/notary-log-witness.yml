@@ -1,0 +1,37 @@
+# Keeps an outside copy of the notary's transparency log head, every hour.
+# cmd/notary-log-witness checks the head's signature against the pinned key and
+# that it extends the last head kept; a run that fails keeps nothing. The heads
+# are kept on the notary-log branch, so every head the log has shown is in git
+# history with GitHub's own times. See notary/LOG-WITNESS.md.
+name: notary log witness
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: notary-log-witness
+  cancel-in-progress: false
+jobs:
+  witness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: notary-log
+          path: witness
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go run ./cmd/notary-log-witness -dir witness/notary/log
+      - name: Keep the head
+        working-directory: witness
+        run: |
+          git add notary/log
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "notary-log-witness"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "notary log: $(tail -n 1 notary/log/witness.log)"
+          git push -q origin HEAD:notary-log
