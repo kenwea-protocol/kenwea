@@ -253,6 +253,67 @@ test("records that must not be believed exit 4, each with its reason", async () 
   }
 });
 
+// The published keys come from another host than the notary. When they cannot be
+// read, nothing was found wrong with the record: it could not be checked. A hook
+// asks the person about exit 4 ("did not verify") and only notes exit 3, so this
+// must not look like an altered record (2026-10-31).
+test("published keys that cannot be read are no answer (exit 3), not an unverified record (exit 4)", async () => {
+  /** @type {Record<string, (url: any, init: any, base: any) => Promise<any>>} */
+  const ways = {
+    "the connection fails": async () => {
+      throw new TypeError("fetch failed");
+    },
+    "the web host answers 503": async () => ({ ok: false, status: 503, text: async () => "" }),
+    "the list holds no usable key": async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ keys: [] }) }),
+  };
+  for (const [name, fail] of Object.entries(ways)) {
+    for (const opts of [{}, { failOn: "rejected" }]) {
+      const n = network([INIT, toolResult(record({}))]);
+      const impl = async (/** @type {any} */ url, /** @type {any} */ init) => (String(url) === KEYS_URL && !(init && init.body) ? fail(url, init, n.impl) : n.impl(url, init));
+      const err = sink();
+      const res = await runCheck(KEYED, URL_REF, io(impl, sink(), err), opts);
+      assert.equal(res.code, EXIT.NO_ANSWER, `${name} ${JSON.stringify(opts)}`);
+      assert.match(err.text(), /could not be verified, so nothing is claimed about it: could not read the published keys/, name);
+      assert.doesNotMatch(err.text(), /did not verify/, name);
+    }
+  }
+  // The same record with the keys reachable and a signature that is wrong stays exit 4.
+  const tampered = record({});
+  tampered.signedAttestation.payload = tampered.signedAttestation.payload.replace('"approved"', '"rejected"');
+  const { res } = await check(tampered);
+  assert.equal(res.code, EXIT.UNVERIFIED);
+});
+
+// The answer to initialize is unused, so a server that gives no HTTP answer at all
+// ends the check there instead of costing the check's own two-minute wait on top.
+test("a server that does not answer the initialize probe ends the check at once", async () => {
+  let calls = 0;
+  const impl = async () => {
+    calls += 1;
+    throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  };
+  const err = sink();
+  const res = await runCheck(KEYED, URL_REF, io(impl, sink(), err));
+  assert.equal(res.code, EXIT.NO_ANSWER);
+  assert.equal(calls, 1, "the check proper is never sent");
+  assert.match(err.text(), /check failed: .*timeout/);
+});
+
+test("an HTTP error answer to initialize does not stop the check", async () => {
+  const n = network([toolResult(record({}))]); // the initialize POST is answered below, not from this queue
+  let first = true;
+  const impl = async (/** @type {any} */ url, /** @type {any} */ init) => {
+    if (init && init.body && first) {
+      first = false;
+      return { ok: false, status: 500, headers: { get: () => null }, text: async () => "" };
+    }
+    return n.impl(url, init);
+  };
+  const res = await runCheck(KEYED, URL_REF, io(impl, sink(), sink()));
+  assert.equal(res.code, EXIT.OK);
+  assert.equal(res.verdict, "approved");
+});
+
 test("a record from before keys were named is tried against every published key", async () => {
   const { res } = await check(record({}, { format1: true }));
   assert.equal(res.code, EXIT.OK);

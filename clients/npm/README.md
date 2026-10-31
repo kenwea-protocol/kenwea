@@ -84,7 +84,11 @@ Your lockfile is read on your machine. Only the packages it marks `hasInstallScr
    revoked key; that the signed record is about the address you asked for; and,
    for an npm package, that the tarball npm installs matches the registry's
    `dist.integrity` and the record's sha256. A record that does not verify is
-   reported as such, with exit code 4.
+   reported as such, with exit code 4. Since 0.7.3, when the key list itself cannot
+   be read, nothing was found wrong with the record and it could not be checked:
+   that is exit code 3, said as such, not 4. Also since 0.7.3 a notary that gives no
+   HTTP answer to the opening `initialize` within 15 seconds ends the check there
+   (exit 3), instead of the check waiting out its own two minutes.
    Since 0.3.1 the `install-scripts` and `network` gates pass on an empty step list only when the signed reason code is `no_install_steps`; a record that did not find out what runs (`extract_failed`, `no_manifest`, `report_unreliable`, a runner limit) fails them.
 
 Verdicts are `approved`, `manual_review`, `rejected`, or `notarized` for media. For
@@ -141,7 +145,7 @@ package's verdict is `approved` or `manual_review` — so gate on `install-scrip
 | 0 | checked and verified, and no gate tripped (or none was set) |
 | 1 | a `--fail-on` gate tripped |
 | 2 | the command line was wrong (unknown options and values are errors, not ignored) |
-| 3 | no answer: not resolvable, not fetchable, refused or unreachable |
+| 3 | no answer: not resolvable, not fetchable, refused or unreachable, or the published key list could not be read (0.7.3) |
 | 4 | the answer did not verify: bad or revoked signature, or not about these bytes |
 
 Add `--json` to get the raw result on stdout (progress goes to stderr) for scripting:

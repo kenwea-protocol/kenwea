@@ -55,6 +55,9 @@ const UNFINISHED = new Set(["step_timed_out", "run_incomplete", "trace_unavailab
 // the MCP server's 90 s; this is a little over that.
 const CHECK_TIMEOUT_MS = 120_000;
 const FETCH_TIMEOUT_MS = 30_000;
+// The initialize probe before a check: long enough for a slow, loaded server, short
+// enough that a silent one is given up on well before the check's own wait.
+const INIT_TIMEOUT_MS = 15_000;
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024;
 const SPKI_ED25519_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
@@ -115,16 +118,30 @@ export async function runCheck(config, artifactRef, io = {}, opts = {}) {
   const keyless = !config.apiKey;
   const active = keyless ? { ...config, url: notaryUrl(config.url) } : config;
 
-  await rpc(doFetch, active, session, {
-    jsonrpc: "2.0",
-    id: "check-initialize",
-    method: "initialize",
-    params: {
-      protocolVersion: config.protocolVersion,
-      capabilities: {},
-      clientInfo: { name: "@kenwea/mcp", version: "check" },
+  // The answer to initialize is not used, so this call is a probe: if nothing
+  // answers at all (refused, unreachable, or silent past INIT_TIMEOUT_MS) the check
+  // proper would wait out its own two minutes for the same silence, once per
+  // install a hook runs. An HTTP answer of any kind, even an error, goes on.
+  const init = await rpc(
+    doFetch,
+    active,
+    session,
+    {
+      jsonrpc: "2.0",
+      id: "check-initialize",
+      method: "initialize",
+      params: {
+        protocolVersion: config.protocolVersion,
+        capabilities: {},
+        clientInfo: { name: "@kenwea/mcp", version: "check" },
+      },
     },
-  });
+    INIT_TIMEOUT_MS,
+  );
+  if (init.status === 0) {
+    err.write(`[kenwea-mcp] check failed: ${sanitize(detail(init))}\n`);
+    return done(EXIT.NO_ANSWER, null, null);
+  }
 
   const res = await rpc(
     doFetch,
@@ -178,6 +195,14 @@ export async function runCheck(config, artifactRef, io = {}, opts = {}) {
     const checked = await verifyRecord(doFetch, result, ref, opts.keysUrl ?? KEYS_URL);
     if (!checked.ok) {
       out.write(opts.json ? JSON.stringify(result) + "\n" : render(result, ref, null));
+      // The published keys could not be read: nothing was found wrong with the
+      // record, it could not be checked. That is a non-answer (exit 3), not the
+      // same finding as an altered or revoked one (exit 4), which a hook asks
+      // the person about (2026-10-31).
+      if (checked.unreachable) {
+        err.write(`[kenwea-mcp] the record could not be verified, so nothing is claimed about it: ${sanitize(checked.error)}\n`);
+        return done(EXIT.NO_ANSWER, null, result);
+      }
       err.write(`[kenwea-mcp] the record did not verify: ${sanitize(checked.error)}\n`);
       return done(EXIT.UNVERIFIED, null, result);
     }
@@ -309,7 +334,7 @@ export function gateRefusals(gates, facts) {
  * @param {any} result
  * @param {string} ref the address that was asked about
  * @param {string} keysUrl
- * @returns {Promise<{ok: true, facts: any, key: {keyId: string, status: string}} | {ok: false, error: string}>}
+ * @returns {Promise<{ok: true, facts: any, key: {keyId: string, status: string}} | {ok: false, error: string, unreachable?: boolean}>} unreachable: the published keys could not be read, so the record could not be checked either way
  */
 export async function verifyRecord(doFetch, result, ref, keysUrl) {
   const signed = result && result.signedAttestation;
@@ -326,7 +351,7 @@ export async function verifyRecord(doFetch, result, ref, keysUrl) {
   if (!facts || facts.issuer !== "kenwea.com") return { ok: false, error: "the signed payload does not name kenwea.com as its issuer" };
 
   const listed = await fetchKeys(doFetch, keysUrl);
-  if (!listed.ok) return { ok: false, error: `could not read the published keys at ${keysUrl}: ${listed.error}` };
+  if (!listed.ok) return { ok: false, unreachable: true, error: `could not read the published keys at ${keysUrl}: ${listed.error}` };
   const named = typeof facts.keyId === "string" ? facts.keyId : "";
   // A format 2 record names its key; an older one is tried against every key.
   const candidates = named ? listed.keys.filter((k) => k.keyId === named) : listed.keys;
