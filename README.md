@@ -189,7 +189,7 @@ Platform API directly to the public internet.
 | `POST` | `/mcp/v1` | Accepts JSON-RPC MCP requests. |
 | `GET` | `/mcp/v1` | Returns poll/event-stream readiness status. |
 | `DELETE` | `/mcp/v1` | Terminates an MCP session by `Mcp-Session-Id`. |
-| `POST` | `/notary/v1` | The notary server: JSON-RPC MCP with three tools and no key (see below). |
+| `POST` | `/notary/v1` | The notary server: JSON-RPC MCP with five tools and no key (see below). |
 | `GET` | `/notary/v1/health` | Returns notary endpoint health. |
 
 Any other path returns `not_found`.
@@ -197,14 +197,18 @@ Any other path returns `not_found`.
 ## Notary Endpoint
 
 `https://mcp.kenwea.com/notary/v1` is `kenwea.sandbox.check` offered on its own
-(registry name `com.kenwea.www/notary`). It lists exactly three tools and reaches
+(registry name `com.kenwea.www/notary`). It lists five tools and reaches
 nothing else:
 
 | Tool | Behavior |
 | --- | --- |
-| `kenwea.notary.check` | Takes `artifactRef` (an https URL) or `package` (an npm package name, resolved to the tarball `npm install` would fetch) and returns the sandbox verdict signed under the published Ed25519 key. |
-| `kenwea.notary.verify` | Takes a record's `payload` and `signature` and checks them against the key the payload names in the published key list (`/.well-known/kenwea-attestation-keys.json`); a record signed with a revoked key returns `valid: false`. Optionally compares a `contentSha256` you hold. Runs nothing. |
-| `kenwea.notary.getPublicKey` | Returns the active key (keyId, base64, PEM, URL) and every published key with its status, so a record can be verified with the caller's own Ed25519 code. Runs nothing. |
+| `kenwea_notary_check` | Takes `artifactRef` (an https URL) or `package` (an npm package name, resolved to the tarball `npm install` would fetch; `pypi:name@version` for PyPI) and returns the sandbox verdict signed under the published Ed25519 key. |
+| `kenwea_notary_check_tree` | Takes a project's package-lock.json, pnpm-lock.yaml, yarn.lock or package.json and answers for the whole dependency tree from stored signed records, checked through the project's direct dependencies; packages with no record yet are queued. |
+| `kenwea_notary_check_tools` | Takes an MCP server's `tools/list` answer, or its Smithery name, and reads the tool definitions by fixed rules for instructions hidden from the user. Runs nothing and calls no server. |
+| `kenwea_notary_verify` | Takes a record's `payload` and `signature` and checks them against the key the payload names in the published key list (`/.well-known/kenwea-attestation-keys.json`); a record signed with a revoked key returns `valid: false`. Optionally compares a `contentSha256` you hold. Runs nothing. |
+| `kenwea_notary_get_public_key` | Returns the active key (keyId, base64, PEM, URL) and every published key with its status, so a record can be verified with the caller's own Ed25519 code. Runs nothing. |
+
+The older dotted names (`kenwea.notary.check`, `kenwea.notary.verify`, `kenwea.notary.getPublicKey`) still answer, but are no longer listed.
 
 No key is needed. A keyless check goes to the platform's `POST /public/sandbox/check`,
 bounded to 20 per hour per network address (an IPv6 /64 counts as one) and by one

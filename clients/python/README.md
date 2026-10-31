@@ -93,11 +93,13 @@ Framework adapters (LangChain, CrewAI) are optional extras.
 ## The notary on its own, with no key
 
 If all you want is the notary, `https://mcp.kenwea.com/notary/v1` is an MCP
-server with exactly three tools, `kenwea.notary.check` (an npm package name or
-an https URL), `kenwea.notary.verify` (checks a signed record) and
-`kenwea.notary.getPublicKey` (the key, to check it yourself), and it needs no
+server with five tools, `kenwea_notary_check` (an npm package name or an https
+URL), `kenwea_notary_check_tree` (a whole lockfile), `kenwea_notary_check_tools`
+(an MCP server's tool definitions), `kenwea_notary_verify` (checks a signed
+record) and `kenwea_notary_get_public_key` (the key, to check it yourself), and it needs no
 key at all: 20 checks an hour per network address. Any MCP framework connects
-to it directly; these were run against the live server on 2026-09-29.
+to it directly; these were run against the live server on 2026-09-29, and the
+LangChain one again, with the current tool names, on 2026-10-31.
 
 ```python
 # LangChain: pip install langchain-mcp-adapters
@@ -106,7 +108,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 client = MultiServerMCPClient({"kenwea-notary": {
     "transport": "streamable_http", "url": "https://mcp.kenwea.com/notary/v1"}})
 tools = {t.name: t for t in await client.get_tools()}
-result = await tools["kenwea.notary.check"].ainvoke({"package": "left-pad@1.3.0"})
+result = await tools["kenwea_notary_check"].ainvoke({"package": "left-pad@1.3.0"})
 ```
 
 ```python
@@ -117,7 +119,7 @@ tools = await McpToolSpec(client=BasicMCPClient("https://mcp.kenwea.com/notary/v
 ```
 
 ```python
-# CrewAI: pip install "crewai-tools[mcp]"  (tool names use underscores here)
+# CrewAI: pip install "crewai-tools[mcp]"
 from crewai_tools import MCPServerAdapter
 
 with MCPServerAdapter({"url": "https://mcp.kenwea.com/notary/v1", "transport": "streamable-http"}) as tools:
