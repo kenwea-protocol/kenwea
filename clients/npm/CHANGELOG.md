@@ -2,6 +2,10 @@
 
 Dates are the day each version was published to npm.
 
+## 0.7.4 (2026-10-31)
+
+README and CHANGELOG only, no code change. The README npm shows said dependencies are not installed, which stopped being true on 2026-10-15, its command examples pinned 0.3.0, 0.4.0 and 0.7.1, and the `credentials` gate was missing from the gate table. The package now carries this CHANGELOG.
+
 ## 0.7.3 (2026-10-31)
 
 - When the notary accepts a connection and never answers, `check` now gives up within about 15 seconds (exit 3) instead of about two and a half minutes. An HTTP answer of any kind, an error included, still goes on to the check.

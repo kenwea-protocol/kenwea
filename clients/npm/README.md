@@ -51,7 +51,7 @@ You can run code yourself; most agents have a sandbox, and Docker is there for e
 ### A whole dependency tree: `check-tree` (0.7.0, workspaces 0.7.1)
 
 ```
-npx -y @kenwea/mcp@0.7.1 check-tree --fail-on network,credentials --wait 600
+npx -y @kenwea/mcp@0.7.4 check-tree --fail-on network,credentials --wait 600
 ```
 
 Your lockfile is read on your machine. Only the packages it marks `hasInstallScript` (usually a few percent of a tree) and your project's own direct dependencies are sent to the notary, by name and version; the names of the rest never leave your machine. Since 0.7.0 the tree is checked through those direct dependencies, each with its whole tree, because a step runs under the package that pulled it in: `@scarf/scarf` reports install telemetry only for the package that depends on it, so checked alone it looked quiet. A package under a direct dependency comes back `UNDER`, answered by that dependency's record, and a gate reads what ran in a record's dependency tree, not only the package's own steps. The direct dependencies come from the root of a package-lock.json, every importer of a pnpm-lock.yaml (in a workspace each package is a project of its own; before 0.7.1 only `.` was read, so a monorepo whose root declares few dependencies was checked package by package), or, for a yarn.lock, the package.json beside it; without one, each package is checked on its own and the output says so. Each comes back with its stored signed record, made by the same sandbox run with decoy credentials, or is queued and checked in the background, about two a minute. Every record is verified here: the signature under the key it names, and the tarball matched against your lockfile's `integrity` and the record's sha256. A gate cannot pass on a package that has no record yet; `--wait <seconds>` asks again until it has. It reads package-lock.json (version 2 or 3), pnpm-lock.yaml (v5, v6, v9) and yarn.lock (v1 and berry), and with no path it uses whichever of them is in the current directory. pnpm up to v6 marks the packages that run something (`requiresBuild`); pnpm v9 and yarn do not, so those versions are asked of the npm registry from your machine, as an install does, and their names still do not go to Kenwea. A package that could not be classified is said, and a gate cannot pass on it. Integrity is checked with the strongest algorithm your lockfile lists, sha1 for old yarn entries included.
@@ -64,9 +64,15 @@ Your lockfile is read on your machine. Only the packages it marks `hasInstallScr
      would run (`preinstall`, `install`, `postinstall`, and the `node-gyp rebuild`
      npm adds for a `binding.gyp`) are run inside `node_modules` of a project that
      depends on it, with the variables npm gives install scripts. Each step is
-     traced for the connections, DNS lookups and programs it attempts.
-     Dependencies are **not** installed, so a step that needs one fails here for
-     our reason, not the package's, and we say so.
+     traced for the connections, DNS lookups and programs it attempts. The
+     package's whole dependency tree is installed first, as npm installs it, and
+     every install step in it runs, the dependencies' first, each one named in the
+     record. A step our sandbox cannot finish (there are no native build tools, and
+     our clock stops long steps) is named as not run or not finished, so a failure
+     there can be ours, not the package's, and the record says so. The steps run
+     with decoy credentials where a developer machine keeps real ones (an npm
+     token, a GitHub token, AWS and SSH files, CI variables), and the record says
+     which of them a step opened or tried to send.
    - **A single JavaScript or Python file** (by extension or shebang) is executed the
      same way, and traced the same way.
    - **A media file** (png/jpeg/gif/webp, wav/mp3/ogg/flac, mp4/webm) is not code, so
@@ -124,13 +130,14 @@ is a successful result, even when the verdict is `rejected`. To make a pipeline
 **block**, name the gates with `--fail-on` (comma separated):
 
 ```bash
-npx -y @kenwea/mcp@0.4.0 check express@4.18.2 --fail-on install-scripts,network
+npx -y @kenwea/mcp@0.7.4 check express@4.18.2 --fail-on install-scripts,network
 ```
 
 | Gate | Fails when the signed record says |
 | --- | --- |
 | `install-scripts` | the package runs anything at install (`installSteps` is not empty) |
-| `network` | an install step tried to reach the network, or the steps did not finish so it cannot say |
+| `network` | an install step tried to reach the network or to send a credential, or the steps did not finish so it cannot say |
+| `credentials` | an install step opened one of the decoy credential files or tried to send a decoy credential (0.4.0) |
 | `manual_review` | the verdict is `manual_review` or `rejected` |
 | `rejected` | the verdict is `rejected` |
 
@@ -151,7 +158,7 @@ package's verdict is `approved` or `manual_review` — so gate on `install-scrip
 Add `--json` to get the raw result on stdout (progress goes to stderr) for scripting:
 
 ```bash
-npx -y @kenwea/mcp@0.4.0 check express@4.18.2 --json | jq .installSteps
+npx -y @kenwea/mcp@0.7.4 check express@4.18.2 --json | jq .installSteps
 ```
 
 Text from the package's own install output is printed with escape sequences removed
@@ -163,7 +170,7 @@ On GitHub Actions, either run it as a plain step — no action to install:
 ```yaml
 # .github/workflows/notarize.yml — block a dependency that runs anything at install
 - name: Notarize a dependency's install behaviour
-  run: npx -y @kenwea/mcp@0.3.0 check ${{ matrix.package }} --fail-on install-scripts,network
+  run: npx -y @kenwea/mcp@0.7.4 check ${{ matrix.package }} --fail-on install-scripts,network
 ```
 
 …or use the wrapper action, which adds outputs (`verdict`, `reason-code`,
