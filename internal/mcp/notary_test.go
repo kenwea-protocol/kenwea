@@ -43,7 +43,7 @@ func structured(t *testing.T, r notaryReply) (map[string]any, bool) {
 	return sc, isErr
 }
 
-// Exactly four tools, on both protocol eras, and nothing from the marketplace can
+// Exactly five tools, on both protocol eras, and nothing from the marketplace can
 // be reached through this path.
 func TestNotaryListsThreeToolsAndReachesNothingElse(t *testing.T) {
 	forwarder := &recordingForwarder{}
@@ -65,8 +65,8 @@ func TestNotaryListsThreeToolsAndReachesNothingElse(t *testing.T) {
 	} {
 		_, list := callNotary(t, server, "tools/list", era.params, era.headers)
 		tools, _ := list.Result["tools"].([]any)
-		if len(tools) != 4 {
-			t.Fatalf("expected 4 notary tools, got %d: %v", len(tools), list)
+		if len(tools) != 5 {
+			t.Fatalf("expected 5 notary tools, got %d: %v", len(tools), list)
 		}
 	}
 

@@ -216,6 +216,9 @@ func route(method string, params json.RawMessage) (string, string, io.Reader, er
 	case "kenwea.notary.checkTree":
 		// A whole dependency tree, answered from stored records; keyless always.
 		return http.MethodPost, "/public/notary/tree", bytes.NewReader(params), nil
+	case "kenwea.notary.checkTools":
+		// Tool definitions scored by fixed rules; nothing runs, keyless always.
+		return http.MethodPost, "/public/notary/tools", bytes.NewReader(params), nil
 	case "kenwea.sandbox.check", "kenwea.notary.check":
 		// kenwea.notary.check without a key goes to /public/sandbox/check instead;
 		// ForwardTool decides, because only it can see the Authorization header.

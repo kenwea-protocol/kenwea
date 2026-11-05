@@ -7,14 +7,14 @@ package mcp
 // notary, and the market that exists for it is developers and CI asking what a
 // package does at install (see the notary pivot, 2026-08-10). The main server
 // leads with 28 marketplace tools that such a caller does not want, and it asks
-// for a key before the first useful call. This endpoint has four tools, needs no
+// for a key before the first useful call. This endpoint has five tools, needs no
 // key, and is listed on its own. Glama scored the main server's tool count 2/5
 // and suggested exactly this split.
 //
 // What it shares with the main server: the process, the protocol helpers, the
 // platform forwarder and the platform's rate limits. What it deliberately does
 // not share: sessions, the tourist gate and the marketplace tool list. Only the
-// four tools below exist here, so nothing else can be reached through it.
+// five tools below exist here, so nothing else can be reached through it.
 
 import (
 	"crypto/ed25519"
@@ -46,6 +46,7 @@ const (
 	notaryVerifyTool = "kenwea.notary.verify"
 	notaryKeyTool    = "kenwea.notary.getPublicKey"
 	notaryTreeTool   = "kenwea.notary.checkTree"
+	notaryToolsTool  = "kenwea.notary.checkTools"
 )
 
 // The names tools/list offers. Until 2026-10-11 the list offered the dotted names
@@ -58,6 +59,7 @@ const (
 	notaryVerifyName = "kenwea_notary_verify"
 	notaryKeyName    = "kenwea_notary_get_public_key"
 	notaryTreeName   = "kenwea_notary_check_tree"
+	notaryToolsName  = "kenwea_notary_check_tools"
 )
 
 // notaryTool maps a called name, listed or alias, to the tool it means.
@@ -66,6 +68,7 @@ var notaryTool = map[string]string{
 	notaryVerifyName: notaryVerifyTool, notaryVerifyTool: notaryVerifyTool,
 	notaryKeyName: notaryKeyTool, notaryKeyTool: notaryKeyTool,
 	notaryTreeName: notaryTreeTool, notaryTreeTool: notaryTreeTool,
+	notaryToolsName: notaryToolsTool, notaryToolsTool: notaryToolsTool,
 }
 
 // attestationKeyURL is where the notary's public key is published (the same URL
@@ -77,7 +80,7 @@ var attestationKeyURL = "https://www.kenwea.com/.well-known/kenwea-attestation-k
 // connector directory, whose policy does not let a server steer the model
 // toward other tools or services the user did not ask for. The notary
 // describes itself and nothing else, in its introduction and in every result.
-const notaryInstructions = "Kenwea notary. kenwea_notary_check fetches an https file, npm tarball or Python wheel (or an npm package by name), runs it with no route out (a stand-in network inside the sandbox records what it sends), and returns a verdict signed under a published Ed25519 key and bound to the sha256 of the bytes. kenwea_notary_verify checks such a signed record, and kenwea_notary_get_public_key returns the key so you can check it yourself. No key, signup or payment: checks are limited per network address and in total per hour. A signed record states only what the artifact did."
+const notaryInstructions = "Kenwea notary. kenwea_notary_check fetches an https file, npm tarball or Python wheel (or an npm package by name), runs it with no route out (a stand-in network inside the sandbox records what it sends), and returns a verdict signed under a published Ed25519 key and bound to the sha256 of the bytes. kenwea_notary_check_tools reads an MCP server's tool definitions for instructions hidden from the user, by fixed rules, before you connect it. kenwea_notary_verify checks a signed record from kenwea_notary_check, and kenwea_notary_get_public_key returns the key so you can check it yourself. No key, signup or payment: checks are limited per network address and in total per hour. A signed record states only what the artifact did."
 
 func notaryServerInfo() map[string]string {
 	return map[string]string{"name": "kenwea-notary", "title": "Kenwea Notary", "version": "1.0.0"}
@@ -186,8 +189,10 @@ func (s *Server) serveNotary(w http.ResponseWriter, r *http.Request) {
 			reply(notaryPublicKey())
 		case notaryTreeTool:
 			reply(s.notaryTree(r, args))
+		case notaryToolsTool:
+			reply(s.notaryTools(r, args))
 		default:
-			writeRPCMethodNotFound(w, req.ID, "the notary server has four tools, kenwea_notary_check, kenwea_notary_check_tree, kenwea_notary_verify and kenwea_notary_get_public_key; the marketplace tools are at /mcp/v1")
+			writeRPCMethodNotFound(w, req.ID, "the notary server has five tools, kenwea_notary_check, kenwea_notary_check_tree, kenwea_notary_check_tools, kenwea_notary_verify and kenwea_notary_get_public_key; the marketplace tools are at /mcp/v1")
 		}
 	default:
 		writeRPCMethodNotFound(w, req.ID, "this server implements the tools capability only")
@@ -273,6 +278,31 @@ func (s *Server) notaryTree(r *http.Request, args json.RawMessage) map[string]an
 		return toolError("platform_api_unavailable", "the notary is not connected to the platform")
 	}
 	result, err := s.forwarder.ForwardTool(r, notaryTreeTool, args)
+	if err != nil {
+		var pe *PlatformError
+		if errors.As(err, &pe) && pe.StatusCode >= 400 && pe.StatusCode < 500 {
+			return toolError(pe.Code, pe.Detail)
+		}
+		return toolError("platform_api_unavailable", "the platform did not answer; retry later")
+	}
+	return responseResult(result, true).(map[string]any)
+}
+
+// notaryTools scores an MCP server's tool definitions (2026-10-30). The rules
+// run on the platform, so the answer is the same whichever client asked.
+func (s *Server) notaryTools(r *http.Request, args json.RawMessage) map[string]any {
+	var in struct {
+		Tools  []json.RawMessage `json:"tools"`
+		Server string            `json:"server"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil || (len(in.Tools) == 0 && strings.TrimSpace(in.Server) == "") {
+		return toolError("validation_failed", "give tools, the tools array of a server's tools/list answer, or server, its name as Smithery lists it")
+	}
+	log.Printf("mcp.notary.call tool=%s tools=%d server=%t client=%s", notaryToolsTool, len(in.Tools), in.Server != "", callerHash(r))
+	if s.forwarder == nil {
+		return toolError("platform_api_unavailable", "the notary is not connected to the platform")
+	}
+	result, err := s.forwarder.ForwardTool(r, notaryToolsTool, args)
 	if err != nil {
 		var pe *PlatformError
 		if errors.As(err, &pe) && pe.StatusCode >= 400 && pe.StatusCode < 500 {
@@ -496,7 +526,7 @@ func notaryToolDescriptors() []map[string]any {
 		{
 			"name":        notaryCheckName,
 			"title":       "Notarize what an artifact does",
-			"description": "Notarize what a file or npm package does at the moment Kenwea fetches it, and get a signed record anyone can check.\nInput: exactly one of artifactRef, a public https URL of a single file, npm tarball or Python wheel, or package, an npm package name such as express@4.18.2 (resolved to the exact tarball npm install would download; no version means latest), or a Python one as pypi:requests@2.31.0 (resolved on PyPI to the wheel this sandbox can import: pure Python, or musllinux for CPython 3.12), or an OpenClaw plugin on ClawHub as clawhub:name@version (the release ClawHub serves, refused unless it has the SHA-256 ClawHub publishes; no install step runs, as OpenClaw installs with --ignore-scripts, and the plugin is loaded as OpenClaw loads it, its openclaw.extensions entries imported and register() called with a stand-in OpenClaw API, decoy OpenClaw keys in its config and in ~/.openclaw).\nBehavior: Kenwea downloads the bytes (up to 32 MiB) and runs executable content in isolation: no route out (a stand-in network inside the sandbox answers lookups and connections on ports 80, 443, 8080 and 8443 and records them), all capabilities dropped, read-only filesystem, not as root, 15 seconds for a file and 55 for a package. For a package it runs the install steps npm would run (preinstall, install, postinstall, and the node-gyp step npm adds for a binding.gyp) with decoy credentials where a developer machine or CI runner keeps real ones (an npm token in ~/.npmrc and NPM_TOKEN, a GitHub token, AWS keys, an SSH key, CI variables), each traced for the network connections, DNS lookups and programs it attempts, the credential files it opens and any decoy it puts into what it sends or starts; a single file and a Python package run with the same decoys (plus a PyPI token for Python) and are traced the same way; a PyPI wheel (package pypi:name) is imported with its dependencies installed, resolved as pip would for CPython 3.12 on Linux x86_64 and each checked against PyPI's sha256. After its install a registry npm package is also loaded once, as an application would require or import it, and onLoad says what loading it did; a load that reaches the network or a credential is its own finding (load_tried_network, load_read_credentials, load_sent_credentials). For a registry package that runs something at install, the dependency tree npm would install goes in first, each tarball checked against the registry's integrity hash, and every install step in the tree runs, the dependencies' first; a package that declares none is checked when a dependency does (dependencies.installSteps names them).\nReturns: level, one word for what the record means (nothing_runs, quiet, network, reads_credentials, sends_credentials, unfinished), and summary, one sentence; installSteps (what runs at install; empty means nothing does) and observed (what the steps attempted, with credentialsRead and credentialsSent when a decoy was touched, and requests: what a step sent to the stand-in network, plain HTTP in full and TLS by server name and size, never decrypted); for an npm package, sincePrevious, which install steps were added, removed or changed since the previous published version (from the registry, not signed); a verdict and a reasonCode, the sha256 of what was read, and signedAttestation, an Ed25519 signature over the facts. quiet (verdict approved) means everything that ran finished, was traced whole and touched nothing watched; a step that tried the network, read a credential file, failed or could not be observed is manual_review with the reason; rejected is for a step that tried to send a decoy credential, and for files carrying a provider-formatted credential. A URL that cannot be fetched returns checked false with the reason instead of a verdict; a limit of our runner comes back as manual_review stated as ours.\nLimits: no key or signup; 20 checks per hour per network address (an IPv6 /64 counts as one address) within a shared hourly ceiling, refused with rate_limited and the reset time. A Kenwea API key sent as a Bearer token uses that key's own quota. At most four checks run at once; one that gets no slot within 10 seconds comes back manual_review with reasonCode runner_busy and nothing run, so retry. The same bytes at the same address under the same checker version get the record issued the first time, marked cached, and nothing is run again. Keeps no copy of the artifact; a finished record is held in memory for up to 24 hours to answer repeats, and a rate counter and a log line keep a short hash of your address.\nNot for: checking a record you already have (use kenwea_notary_verify, which runs nothing and does not spend your quota).",
+			"description": "Notarize what a file or npm package does at the moment Kenwea fetches it, and get a signed record anyone can check.\nInput: exactly one of artifactRef, a public https URL of a single file, npm tarball or Python wheel, or package, an npm package name such as express@4.18.2 (resolved to the exact tarball npm install would download; no version means latest), or a Python one as pypi:requests@2.31.0 (resolved on PyPI to the wheel this sandbox can import: pure Python, or musllinux for CPython 3.12), or an OpenClaw plugin on ClawHub as clawhub:name@version (the release ClawHub serves, refused unless it has the SHA-256 ClawHub publishes; no install step runs, as OpenClaw installs with --ignore-scripts, and the plugin is loaded as OpenClaw loads it, its openclaw.extensions entries imported and register() called with a stand-in OpenClaw API, decoy OpenClaw keys in its config and in ~/.openclaw).\nBehavior: Kenwea downloads the bytes (up to 32 MiB) and runs executable content in isolation: no route out (a stand-in network inside the sandbox answers every lookup and every TCP connection, on any port and straight to any IP address, and records them), all capabilities dropped, read-only filesystem, not as root, 15 seconds for a file and 55 for a package. For a package it runs the install steps npm would run (preinstall, install, postinstall, and the node-gyp step npm adds for a binding.gyp) with decoy credentials where a developer machine or CI runner keeps real ones (an npm token in ~/.npmrc and NPM_TOKEN, a GitHub token, AWS keys, an SSH key, CI variables, and wallet keys: a Solana keypair, Ethereum and Foundry keystores, MetaMask and Phantom vaults, PRIVATE_KEY, a seed phrase and RPC API keys), each traced for the network connections, DNS lookups and programs it attempts, the credential files it opens and any decoy it puts into what it sends or starts; a single file and a Python package run with the same decoys (plus a PyPI token for Python) and are traced the same way; a PyPI wheel (package pypi:name) is imported with its dependencies installed, resolved as pip would for CPython 3.12 on Linux x86_64 and each checked against PyPI's sha256. After its install a registry npm package is also loaded once, as an application would require or import it, and onLoad says what loading it did; a load that reaches the network or a credential is its own finding (load_tried_network, load_read_credentials, load_sent_credentials). For a registry package that runs something at install, the dependency tree npm would install goes in first, each tarball checked against the registry's integrity hash, and every install step in the tree runs, the dependencies' first; a package that declares none is checked when a dependency does (dependencies.installSteps names them).\nReturns: level, one word for what the record means (nothing_runs, quiet, network, reads_credentials, sends_credentials, unfinished), and summary, one sentence; installSteps (what runs at install; empty means nothing does) and observed (what the steps attempted, with credentialsRead and credentialsSent when a decoy was touched, and requests: what a step sent to the stand-in network, plain HTTP in full, HTTPS in full when the step accepted the stand-in's certificate authority and otherwise by server name and size); for an npm package, sincePrevious, which install steps were added, removed or changed since the previous published version (from the registry, not signed); a verdict and a reasonCode, the sha256 of what was read, and signedAttestation, an Ed25519 signature over the facts. quiet (verdict approved) means everything that ran finished, was traced whole and touched nothing watched; a step that tried the network, read a credential file, failed or could not be observed is manual_review with the reason; rejected is for a step that tried to send a decoy credential, and for files carrying a provider-formatted credential. A URL that cannot be fetched returns checked false with the reason instead of a verdict; a limit of our runner comes back as manual_review stated as ours.\nLimits: no key or signup; 20 checks per hour per network address (an IPv6 /64 counts as one address) within a shared hourly ceiling, refused with rate_limited and the reset time. A Kenwea API key sent as a Bearer token uses that key's own quota. At most four checks run at once; one that gets no slot within 10 seconds comes back manual_review with reasonCode runner_busy and nothing run, so retry. The same bytes at the same address under the same checker version get the record issued the first time, marked cached, and nothing is run again. Keeps no copy of the artifact; a finished record is held in memory for up to 24 hours to answer repeats, and a rate counter and a log line keep a short hash of your address.\nNot for: checking a record you already have (use kenwea_notary_verify, which runs nothing and does not spend your quota).",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -543,6 +573,19 @@ func notaryToolDescriptors() []map[string]any {
 				},
 			},
 			"annotations": map[string]any{"title": "Check a whole dependency tree", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		},
+		{
+			"name":        notaryToolsName,
+			"title":       "Score an MCP server's tool definitions",
+			"description": "Score an MCP server's tool definitions for what they ask of the model, before you connect it.\nInput: tools, the tools array of a server's tools/list answer (each {name, description, inputSchema}); or server, the server's name as Smithery lists it (for example brave or owner/name), whose published definitions are read from Smithery.\nBehavior: runs nothing and calls no server. Fixed rules read each description and every parameter description against the tool's own input schema, because anything in the prose the schema does not need is where an injected instruction lives: tags that frame text as instructions (<IMPORTANT>, <instructions>), HTML comments and invisible characters (zero width, bidirectional controls, Unicode tags), asking the model to drop its instructions, to keep something from the user, or to put a file's contents into an argument, naming files where secrets live (~/.ssh, ~/.cursor/mcp.json, ~/.aws), asking for a credential the schema has no parameter for, steering the model off the web or other servers toward this one, and speaking to the model rather than describing the tool. No model reads the text, so the same definitions always get the same findings and anyone can redo them. Keyless, read-only.\nReturns: level (clean, review or suspicious), summary, findings (each with tool, rule, severity, where and an excerpt), rulesVersion and inputSha256, the SHA-256 of the definitions as read. A finding is a reason to read the definition, not a verdict on the server: on 500 Smithery servers (12,598 tools, rules 2026-10-31.1) 495 were clean, 3 review and 2 suspicious, and read by hand none hid an order or reached for data: the 3 steer the model off web search toward the server, the 2 were a vendor's response instructions and a false positive.\nNot for: what a server's code does when it runs (use kenwea_notary_check on its npm package).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tools":  map[string]any{"type": "array", "description": "The tools array of the server's tools/list answer.", "items": map[string]any{"type": "object"}},
+					"server": map[string]any{"type": "string", "description": "Alternatively, the server's name as Smithery lists it, for example brave or owner/name."},
+				},
+			},
+			"annotations": map[string]any{"title": "Score an MCP server's tool definitions", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
 		},
 	}
 }
