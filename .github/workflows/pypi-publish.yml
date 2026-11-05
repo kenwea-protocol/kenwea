@@ -20,8 +20,8 @@ jobs:
       run:
         working-directory: clients/python
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: The tag names the version being built
@@ -35,7 +35,7 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: clients/python/dist/
@@ -47,7 +47,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
