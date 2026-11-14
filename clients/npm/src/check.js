@@ -28,6 +28,7 @@ import { createHash, createPublicKey, verify as verifySignature } from "node:cry
 
 import { buildHeaders } from "./protocol.js";
 import { redact } from "./config.js";
+import { oddFields } from "./odd.js";
 
 /**
  * @typedef {import("./config.js").BridgeConfig} BridgeConfig
@@ -218,6 +219,9 @@ export async function runCheck(config, artifactRef, io = {}, opts = {}) {
     }
   }
 
+  // What the signed record knows that its level does not say (odd.js). Computed
+  // here from the verified facts, so it is ours and unsigned, and named so.
+  result.oddFields = oddFields(facts);
   out.write(opts.json ? JSON.stringify(result) + "\n" : render(result, ref, signer));
 
   // CI gate. Without --fail-on the command exits 0 whenever it got a verified
@@ -427,11 +431,14 @@ export async function matchTarball(doFetch, pkg, recordSha256) {
   }
   if (bytes.length > MAX_TARBALL_BYTES) return { ok: false, error: "the tarball is larger than the notary reads" };
   const sriOk = pkg.integrity ? sriMatches(pkg.integrity, bytes) : !!pkg.shasum && pkg.shasum === createHash("sha1").update(bytes).digest("hex");
-  if (!sriOk) return { ok: false, error: "the downloaded tarball does not match the registry's integrity hash" };
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  if (sha256 !== recordSha256.toLowerCase()) {
-    return { ok: false, error: `the registry's tarball has sha256 ${sha256}, the record ${recordSha256 || "none"}` };
-  }
+  const shaOk = sha256 === recordSha256.toLowerCase();
+  // Both are reported when both fail (2026-11-12, lilt on Moltbook): stopping
+  // at the first hid the sha256 pair, and the pair is what a reader re-checks.
+  const failures = [];
+  if (!sriOk) failures.push("the downloaded tarball does not match the registry's integrity hash");
+  if (!shaOk) failures.push(`the registry's tarball has sha256 ${sha256}, the record ${recordSha256 || "none"}`);
+  if (failures.length) return { ok: false, error: failures.join("; and ") };
   return { ok: true };
 }
 
@@ -531,6 +538,10 @@ function render(result, artifactRef, signer) {
   if (result.summary) lines.push(`  in short    ${sanitize(result.summary)}`, "");
   lines.push(`  verdict     ${sanitize(String(result.verdict ?? "unknown").toUpperCase())}${result.reasonCode ? ` (${sanitize(result.reasonCode)})` : ""}`);
   if (result.verdictReason) lines.push(`  why         ${sanitize(result.verdictReason)}`);
+  // Only after the record verified: the list is read from its signed fields.
+  if (signer && Array.isArray(result.oddFields)) {
+    lines.push(`  look at     ${result.oddFields.length ? `${result.oddFields.length}: ${result.oddFields.map(sanitize).join("; ")}` : "nothing else in the record"}`);
+  }
   lines.push(`  sha256      ${sanitize(result.contentSha256 ?? "-")}`);
   lines.push(`  size        ${sanitize(result.contentSizeBytes ?? "-")} bytes`);
   if (Array.isArray(result.installSteps)) {

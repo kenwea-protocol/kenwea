@@ -482,3 +482,22 @@ test("a gate reads the dependency tree's install steps", async () => {
   const quiet = { ...facts, reasonCode: "ran_ok", level: "quiet", observed: { network: [], dns: [], truncated: false } };
   assert.deepEqual(gateRefusals(["network"], quiet), [], "a quiet tree passes the network gate");
 });
+
+// When both the registry integrity and the record's sha256 fail, both are named
+// (2026-11-12, lilt on Moltbook).
+test("matchTarball reports both hash failures, not only the first", async () => {
+  const { matchTarball } = await import("../src/check.js");
+  const bytes = Buffer.from("tarball bytes");
+  const doFetch = async () => new Response(bytes);
+  const r = await matchTarball(doFetch, { tarball: "https://example.org/x.tgz", integrity: "sha512-" + Buffer.alloc(64).toString("base64"), shasum: "" }, "0".repeat(64));
+  assert.equal(r.ok, false);
+  assert.match(r.error, /integrity hash/);
+  assert.match(r.error, /has sha256 [0-9a-f]{64}, the record 0{64}/);
+  const { createHash } = await import("node:crypto");
+  const good = "sha512-" + createHash("sha512").update(bytes).digest("base64");
+  const one = await matchTarball(doFetch, { tarball: "https://example.org/x.tgz", integrity: good, shasum: "" }, "0".repeat(64));
+  assert.equal(one.ok, false);
+  assert.doesNotMatch(one.error, /integrity hash/);
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  assert.deepEqual(await matchTarball(doFetch, { tarball: "https://example.org/x.tgz", integrity: good, shasum: "" }, sha), { ok: true });
+});

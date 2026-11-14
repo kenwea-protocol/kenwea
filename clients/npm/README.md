@@ -43,7 +43,7 @@ You can run code yourself; most agents have a sandbox, and Docker is there for e
 
 - Check a package before you install it: `npx -y @kenwea/mcp check <package>`, or `pypi:<name>` for a PyPI project and `clawhub:<name>` for an OpenClaw plugin on ClawHub.
 - Check a whole lockfile, and fail a build on what the records say: `check-tree` below, or the GitHub Action [`kenwea-protocol/kenwea-notary-action@v2`](https://github.com/kenwea-protocol/kenwea-notary-action).
-- Let your agent ask before it installs anything, through the MCP server (`init` below), or in Claude Code with the [kenwea-notary plugin](https://github.com/kenwea-protocol/kenwea-claude-plugin), which checks each package before Claude installs it.
+- Let your agent ask before it installs anything, through the MCP server (`init` below), or in Claude Code with the [kenwea-notary-guard plugin](https://github.com/kenwea-protocol/kenwea-notary-guard), which checks each package before Claude installs it.
 - Verify a record you were given, with this CLI, your own Ed25519 code, or in your browser at [kenwea.com/verify](https://www.kenwea.com/verify).
 
 ## What it actually does
@@ -51,7 +51,7 @@ You can run code yourself; most agents have a sandbox, and Docker is there for e
 ### A whole dependency tree: `check-tree` (0.7.0, workspaces 0.7.1)
 
 ```
-npx -y @kenwea/mcp@0.7.4 check-tree --fail-on network,credentials --wait 600
+npx -y @kenwea/mcp@0.8.0 check-tree --fail-on network,credentials --wait 600
 ```
 
 Your lockfile is read on your machine. Only the packages it marks `hasInstallScript` (usually a few percent of a tree) and your project's own direct dependencies are sent to the notary, by name and version; the names of the rest never leave your machine. Since 0.7.0 the tree is checked through those direct dependencies, each with its whole tree, because a step runs under the package that pulled it in: `@scarf/scarf` reports install telemetry only for the package that depends on it, so checked alone it looked quiet. A package under a direct dependency comes back `UNDER`, answered by that dependency's record, and a gate reads what ran in a record's dependency tree, not only the package's own steps. The direct dependencies come from the root of a package-lock.json, every importer of a pnpm-lock.yaml (in a workspace each package is a project of its own; before 0.7.1 only `.` was read, so a monorepo whose root declares few dependencies was checked package by package), or, for a yarn.lock, the package.json beside it; without one, each package is checked on its own and the output says so. Each comes back with its stored signed record, made by the same sandbox run with decoy credentials, or is queued and checked in the background, about two a minute. Every record is verified here: the signature under the key it names, and the tarball matched against your lockfile's `integrity` and the record's sha256. A gate cannot pass on a package that has no record yet; `--wait <seconds>` asks again until it has. It reads package-lock.json (version 2 or 3), pnpm-lock.yaml (v5, v6, v9) and yarn.lock (v1 and berry), and with no path it uses whichever of them is in the current directory. pnpm up to v6 marks the packages that run something (`requiresBuild`); pnpm v9 and yarn do not, so those versions are asked of the npm registry from your machine, as an install does, and their names still do not go to Kenwea. A package that could not be classified is said, and a gate cannot pass on it. Integrity is checked with the strongest algorithm your lockfile lists, sha1 for old yarn entries included.
@@ -85,6 +85,10 @@ Your lockfile is read on your machine. Only the packages it marks `hasInstallScr
 4. Returns a verdict and a `reasonCode`, `installSteps` (what runs at install; empty
    means nothing does), `observed` (what the steps attempted), the sha256 of what it
    read, the sandbox's own output — and an Ed25519 signature over all of it.
+   Since 0.8.0 the output also has a `look at` line (`oddFields` with `--json`):
+   what else the verified record holds beyond its level, such as an import that
+   failed for an unexplained reason or a program a step did not find. This CLI
+   computes it from the signed facts; it is not itself signed.
 5. **Verifies that record here** before printing it (since 0.3.0): the signature
    against the key the record names in Kenwea's published key list, refusing a
    revoked key; that the signed record is about the address you asked for; and,
@@ -130,7 +134,7 @@ is a successful result, even when the verdict is `rejected`. To make a pipeline
 **block**, name the gates with `--fail-on` (comma separated):
 
 ```bash
-npx -y @kenwea/mcp@0.7.4 check express@4.18.2 --fail-on install-scripts,network
+npx -y @kenwea/mcp@0.8.0 check express@4.18.2 --fail-on install-scripts,network
 ```
 
 | Gate | Fails when the signed record says |
@@ -158,7 +162,7 @@ package's verdict is `approved` or `manual_review` — so gate on `install-scrip
 Add `--json` to get the raw result on stdout (progress goes to stderr) for scripting:
 
 ```bash
-npx -y @kenwea/mcp@0.7.4 check express@4.18.2 --json | jq .installSteps
+npx -y @kenwea/mcp@0.8.0 check express@4.18.2 --json | jq .installSteps
 ```
 
 Text from the package's own install output is printed with escape sequences removed
@@ -170,7 +174,7 @@ On GitHub Actions, either run it as a plain step — no action to install:
 ```yaml
 # .github/workflows/notarize.yml — block a dependency that runs anything at install
 - name: Notarize a dependency's install behaviour
-  run: npx -y @kenwea/mcp@0.7.4 check ${{ matrix.package }} --fail-on install-scripts,network
+  run: npx -y @kenwea/mcp@0.8.0 check ${{ matrix.package }} --fail-on install-scripts,network
 ```
 
 …or use the wrapper action, which adds outputs (`verdict`, `reason-code`,

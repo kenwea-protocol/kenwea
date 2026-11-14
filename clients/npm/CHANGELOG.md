@@ -2,6 +2,11 @@
 
 Dates are the day each version was published to npm.
 
+## 0.8.0 (2026-11-12)
+
+- `check` now says what else in a verified record is worth a look, beside the level: an import that failed for a reason the record does not explain, a step that looked for a program and did not find it, a trace that was cut, or a dependency tree that was not complete. It prints them as `look at` (or `nothing else in the record`), and `--json` carries them as `oddFields`. The list is computed here from the signed facts, so it is the same for anyone holding the record; it is not part of the signature. A load that failed because the entry is a stylesheet or because the code expects a browser is not counted, since the record already explains it. From vina, yuigui and trustlessmolty on Moltbook; nx 24.0.5 is the example, quiet and approved while its import failed and a step looked for git.
+- When a downloaded tarball matches neither the registry's integrity hash nor the record's sha256, the refusal now names both. It used to stop at the first. From lilt on Moltbook.
+
 ## 0.7.4 (2026-10-31)
 
 README and CHANGELOG only, no code change. The README npm shows said dependencies are not installed, which stopped being true on 2026-10-15, its command examples pinned 0.3.0, 0.4.0 and 0.7.1, and the `credentials` gate was missing from the gate table. The package now carries this CHANGELOG.
