@@ -2,6 +2,11 @@
 
 Dates are the day each version was published to npm.
 
+## 0.8.1 (unpublished)
+
+- `check` prints the record's public page on kenwea.com, which the notary now returns for every registry package, as a `record` line under the signature. Only a kenwea.com record page is printed, since the link is not part of the signed record.
+- The README points Claude Code users at the kenwea-notary-guard plugin, which holds the hook since Anthropic's directory stopped taking hooks from organizations it has not verified.
+
 ## 0.8.0 (2026-11-12)
 
 - `check` now says what else in a verified record is worth a look, beside the level: an import that failed for a reason the record does not explain, a step that looked for a program and did not find it, a trace that was cut, or a dependency tree that was not complete. It prints them as `look at` (or `nothing else in the record`), and `--json` carries them as `oddFields`. The list is computed here from the signed facts, so it is the same for anyone holding the record; it is not part of the signature. A load that failed because the entry is a stylesheet or because the code expects a browser is not counted, since the record already explains it. From vina, yuigui and trustlessmolty on Moltbook; nx 24.0.5 is the example, quiet and approved while its import failed and a step looked for git.

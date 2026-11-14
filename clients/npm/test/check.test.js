@@ -501,3 +501,13 @@ test("matchTarball reports both hash failures, not only the first", async () => 
   const sha = createHash("sha256").update(bytes).digest("hex");
   assert.deepEqual(await matchTarball(doFetch, { tarball: "https://example.org/x.tgz", integrity: good, shasum: "" }, sha), { ok: true });
 });
+
+test("a record page is printed only when it is a kenwea.com record", async () => {
+  const { recordPage } = await import("../src/check.js");
+  const good = "https://www.kenwea.com/notary/r/" + "ab".repeat(16);
+  assert.equal(recordPage({ record: { recordUrl: good } }), good);
+  for (const bad of ["https://evil.example/notary/r/" + "ab".repeat(16), good + "?x", "", null]) {
+    assert.equal(recordPage({ record: { recordUrl: bad } }), "");
+  }
+  assert.equal(recordPage({}), "");
+});

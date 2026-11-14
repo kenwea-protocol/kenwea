@@ -582,12 +582,25 @@ function render(result, artifactRef, signer) {
     lines.push("", `  signed      ${sanitize(signed.algorithm)}, key ${sanitize(signed.keyId)}`);
     lines.push(signer ? `  verified    here, against the published key ${signer.keyId} (${signer.status})` : "  verified    no");
     lines.push(`  keys        ${KEYS_URL}`);
+    const page = recordPage(result);
+    if (page) lines.push(`  record      ${page}`);
     lines.push("");
     lines.push("  The claim is about the sha256 above, not the URL — that address can");
     lines.push("  serve something else tomorrow.");
   }
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * The public page of a record, from the links the notary puts beside it. The
+ * link is not signed, so only a kenwea.com record page is printed.
+ * @param {any} result
+ * @returns {string}
+ */
+export function recordPage(result) {
+  const u = result && result.record && result.record.recordUrl;
+  return typeof u === "string" && /^https:\/\/www\.kenwea\.com\/notary\/r\/[0-9a-f]{32}$/.test(u) ? u : "";
 }
 
 /**
